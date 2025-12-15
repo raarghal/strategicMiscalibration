@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import litellm
 import together
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, Template
@@ -12,8 +11,6 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 logger = logging.getLogger(__name__)
 
 ENV_FILE = Path(__file__).parent.parent.parent / ".env"
-
-litellm.enable_json_schema_validation = True
 
 
 class BaseLLMInterface:
