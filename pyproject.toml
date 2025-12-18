@@ -8,6 +8,12 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "dataclasses>=0.8",
+    "datasets>=4.4.1",
+    "logging>=0.4.9.6",
+    "pathlib>=1.0.1",
+    "tqdm>=4.67.1",
+    "typing>=3.10.0.0",
 ]
 
 [tool.poetry]
