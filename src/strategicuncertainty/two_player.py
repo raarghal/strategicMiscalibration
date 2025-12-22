@@ -19,12 +19,12 @@ from typing import Any, Dict, List, Optional
 import datasets
 from tqdm import tqdm
 
-from src.strategicuncertainty.llm_interface import (
+from .llm_interface import (
     UserResponse,
     load_template,
     query_llm,
 )
-from src.strategicuncertainty.utils import (
+from .utils import (
     TEMPLATE_DIR,
     BaseGameConfig,
     HistoryEntry,

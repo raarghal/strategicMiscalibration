@@ -21,7 +21,7 @@ from typing import Any, Dict, List
 import datasets
 from tqdm import tqdm
 
-from src.strategicuncertainty.utils import (
+from .utils import (
     BaseGameConfig,
     QuestionData,
     RoundResult,
