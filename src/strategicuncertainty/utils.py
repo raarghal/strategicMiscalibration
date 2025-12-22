@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
-from src.strategicuncertainty.llm_interface import (
+from .llm_interface import (
     ConfidenceMode,
     ModelResponse,
     load_template,
