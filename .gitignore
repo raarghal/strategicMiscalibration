@@ -192,7 +192,7 @@ cython_debug/
 .vscode/
 
 .github/
-WARP.md
+.warp/
 
 # Ruff stuff:
 .ruff_cache/
