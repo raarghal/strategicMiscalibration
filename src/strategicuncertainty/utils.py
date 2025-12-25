@@ -49,18 +49,24 @@ class RoundResult(TypedDict, total=False):
     model_answer: Optional[str]
     model_confidence: Optional[float]
     model_correct: Optional[bool]
+    model_reasoning: Optional[str]
     # Confidence comparison
     confidence_diff: Optional[float]
     # User results (twoPlayer only)
     user_decision: Optional[str]
     user_reasoning: Optional[str]
-    user_belief: Optional[float]
+    user_belief_honesty: Optional[float]  # h_t
+    user_belief_ability: Optional[float]  # p_t
+    user_belief: Optional[float]  # belief_ai_correct
     user_payoff: Optional[float]
     model_payoff: Optional[float]
 
 
 class HistoryEntry(TypedDict, total=False):
-    """A single entry in the interaction history."""
+    """
+    A single entry in the interaction history.
+    Enriched with user beliefs to allow the AI to track its reputation.
+    """
 
     round: int
     reported_confidence: float
@@ -68,6 +74,11 @@ class HistoryEntry(TypedDict, total=False):
     user_decision: str
     user_payoff: float
     model_payoff: float
+    # New fields for reputation tracking
+    user_belief_honesty: Optional[float]
+    user_belief_ability: Optional[float]
+    user_belief_correct: Optional[float]
+    user_reasoning: Optional[str]
 
 
 class TrialStatistics(TypedDict, total=False):
@@ -95,6 +106,8 @@ class TrialStatistics(TypedDict, total=False):
     ignore_count: int
     purchase_rate: float
     mean_user_belief: float
+    mean_user_belief_honesty: Optional[float]  # Added for h_t tracking
+    mean_user_belief_ability: Optional[float]  # Added for p_t tracking
     user_belief_error: float
     # Payoffs
     total_user_payoff: float

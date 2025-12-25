@@ -38,6 +38,9 @@ class ConfidenceMode(str, Enum):
 class ModelResponse(BaseModel):
     """Schema for model LLM's answer and confidence response."""
 
+    reasoning: str = Field(
+        description="Internal monologue about the strategy for this round"
+    )
     answer: str = Field(description="The model's answer to the question")
     confidence: float = Field(
         description="Confidence score that the answer is correct (0.0 to 1.0)"
@@ -47,10 +50,16 @@ class ModelResponse(BaseModel):
 class UserResponse(BaseModel):
     """Schema for user LLM's purchase decision response."""
 
-    reasoning: str = Field(description="Brief explanation of the decision")
+    reasoning: str = Field(description="Explanation of the belief updates and decision")
     decision: str = Field(description="PURCHASE or IGNORE")
+    belief_honesty: float = Field(
+        description="Probability h_t that the model is reporting confidence honestly"
+    )
+    belief_ability: float = Field(
+        description="Probability p_t that the model is of High Ability"
+    )
     belief_ai_correct: float = Field(
-        description="User's belief about AI's probability of being correct (0.0 to 1.0)"
+        description="Aggregate probability that the current answer is correct"
     )
 
 

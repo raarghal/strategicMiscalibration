@@ -435,7 +435,9 @@ if __name__ == "__main__":
     config = SinglePlayerConfig(
         model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
         num_trials=1,
-        num_rounds=5,
+        num_rounds=10,
+        cost=0.4,
+        reward=1.0,
     )
 
     results = run_trials(config)
