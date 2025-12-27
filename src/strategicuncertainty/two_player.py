@@ -11,7 +11,6 @@ This creates a repeated game with reputation dynamics where both players can lea
 import json
 import logging
 import random
-import argparse
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -266,7 +265,6 @@ def run_one_trial(
             )
             model_answer = model_response.answer
             model_confidence = model_response.confidence
-            model_reasoning = model_response.reasoning
             model_correct = evaluate_answer(model_answer, correct_answer)
         except Exception as e:
             logger.error(
@@ -290,20 +288,26 @@ def run_one_trial(
             user_response = ask_user_llm(cfg, model_confidence, history)
             user_decision = user_response.decision.upper()
             user_reasoning = user_response.reasoning
-            # Use local variables to safeguard against partial failures
-            user_belief_honesty = user_response.belief_honesty
-            user_belief_ability = user_response.belief_ability
-            user_belief_correct = user_response.belief_ai_correct
+            user_belief = user_response.belief_ai_correct
 
+            # Normalize decision
             if user_decision not in ["PURCHASE", "IGNORE"]:
-                user_decision = "PURCHASE" if "PURCHASE" in user_decision else "IGNORE"
+                if "PURCHASE" in user_decision:
+                    user_decision = "PURCHASE"
+                else:
+                    user_decision = "IGNORE"
         except Exception as e:
-            logger.error(f"Error in user LLM query: {e}")
-            # Ensure all variables are set to None if failure occurs
-            user_decision = user_reasoning = user_belief_honesty = (
-                user_belief_ability
-            ) = user_belief_correct = None
+            logger.error(
+                f"Error in user LLM query (trial {trial_idx}, round {round_idx}): {e}"
+            )
+            print(
+                f"Error in user LLM query (trial {trial_idx}, round {round_idx}): {e}"
+            )
+            user_decision = None
+            user_reasoning = None
+            user_belief = None
 
+        # Skip round if user failed
         if user_decision is None:
             if progress:
                 progress.update(1)
@@ -331,15 +335,12 @@ def run_one_trial(
             "model_answer": model_answer,
             "model_confidence": model_confidence,
             "model_correct": model_correct,
-            "model_reasoning": model_reasoning,
             # Confidence comparison
             "confidence_diff": confidence_diff,
             # User LLM results
             "user_decision": user_decision,
             "user_reasoning": user_reasoning,
-            "user_belief_honesty": user_response.belief_honesty,
-            "user_belief_ability": user_response.belief_ability,
-            "user_belief": user_response.belief_ai_correct,
+            "user_belief": user_belief,
             # Payoffs
             "user_payoff": payoffs["user_payoff"],
             "model_payoff": payoffs["model_payoff"],
@@ -354,10 +355,6 @@ def run_one_trial(
             "was_correct": model_correct,
             "user_payoff": payoffs["user_payoff"],
             "model_payoff": payoffs["model_payoff"],
-            "user_belief_honesty": user_belief_honesty,
-            "user_belief_ability": user_belief_ability,
-            "user_belief_correct": user_belief_correct,
-            "user_reasoning": user_reasoning,
         }
         history.append(history_entry)
 
@@ -406,22 +403,10 @@ def compute_trial_statistics(
     purchase_rate = purchase_count / len(round_results)
 
     # User belief accuracy
-    user_honesty_beliefs = [
-        r["user_belief_honesty"]
-        for r in round_results
-        if r.get("user_belief_honesty") is not None
-    ]
-    user_ability_beliefs = [
-        r["user_belief_ability"]
-        for r in round_results
-        if r.get("user_belief_ability") is not None
-    ]
     user_beliefs = [
         r["user_belief"] for r in round_results if r.get("user_belief") is not None
     ]
     mean_user_belief = compute_mean(user_beliefs)
-    mean_user_honesty_beliefs = compute_mean(user_honesty_beliefs)
-    mean_user_ability_beliefs = compute_mean(user_ability_beliefs)
     model_accuracy = model_stats.get("model_accuracy", 0)
     belief_error = (
         abs(mean_user_belief - model_accuracy) if mean_user_belief is not None else None
@@ -443,8 +428,6 @@ def compute_trial_statistics(
         "purchase_count": purchase_count,
         "ignore_count": ignore_count,
         "purchase_rate": purchase_rate,
-        "mean_user_belief_honesty": mean_user_honesty_beliefs,
-        "mean_user_belief_ability": mean_user_ability_beliefs,
         "mean_user_belief": mean_user_belief,
         "user_belief_error": belief_error,
         # Payoffs
@@ -590,8 +573,6 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
     model_confidences = aggregate_trial_stats(valid_trials, "mean_model_confidence")
     confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
     purchase_rates = aggregate_trial_stats(valid_trials, "purchase_rate")
-    honesty_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief_honesty")
-    ability_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief_ability")
     user_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief")
     belief_errors = aggregate_trial_stats(valid_trials, "user_belief_error")
 
@@ -617,8 +598,6 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
         ),
         # User behavior
         "mean_purchase_rate": compute_mean(purchase_rates),
-        "mean_overall_honesty": compute_mean(honesty_beliefs),
-        "mean_overall_ability": compute_mean(ability_beliefs),
         "mean_user_belief": compute_mean(user_beliefs),
         "mean_user_belief_error": compute_mean(belief_errors),
         # Payoffs
@@ -712,12 +691,6 @@ def generate_summary_report(
         lines.append("User Behavior:")
         if overall_stats.get("mean_purchase_rate") is not None:
             lines.append(f"  Purchase rate: {overall_stats['mean_purchase_rate']:.4f}")
-        lines.append(
-            f"  Mean Honesty Belief (h_t): {overall_stats.get('mean_overall_honesty', 0):.4f}"
-        )
-        lines.append(
-            f"  Mean Ability Belief (p_t): {overall_stats.get('mean_overall_ability', 0):.4f}"
-        )
         if overall_stats.get("mean_user_belief") is not None:
             lines.append(
                 f"  Mean user belief about AI correctness: {overall_stats['mean_user_belief']:.4f}"
@@ -754,52 +727,12 @@ def generate_summary_report(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run Two-Player Strategic Uncertainty Experiment"
-    )
-
-    # Experiment Dimensions
-    parser.add_argument(
-        "--trials", type=int, default=1, help="Number of independent trials"
-    )
-    parser.add_argument(
-        "--rounds", type=int, default=10, help="Number of rounds per trial"
-    )
-
-    # LLM Models
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        help="Model LLM name",
-    )
-    parser.add_argument(
-        "--user",
-        type=str,
-        default="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        help="User LLM name",
-    )
-
-    # Game Parameters
-    parser.add_argument(
-        "--cost", type=float, default=0.1, help="Cost (c) to purchase answer"
-    )
-    parser.add_argument(
-        "--reward", type=float, default=1.0, help="Reward (r) for correct answer"
-    )
-    parser.add_argument("--temp", type=float, default=0.0, help="LLM temperature")
-
-    args = parser.parse_args()
-
-    # Initialize config using the values passed from the terminal
+    # Default configuration for testing
     config = TwoPlayerConfig(
-        num_trials=args.trials,
-        num_rounds=args.rounds,
-        model_llm_name=args.model,
-        user_llm_name=args.user,
-        cost=args.cost,
-        reward=args.reward,
-        temperature=args.temp,
+        model_llm_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        user_llm_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        num_trials=1,
+        num_rounds=5,
     )
 
-    run_trials(config)
+    results = run_trials(config)
