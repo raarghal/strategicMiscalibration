@@ -52,7 +52,7 @@ class SinglePlayerConfig(BaseGameConfig):
     # -------------------------------------------------------------------------
     # LLM Configuration
     # -------------------------------------------------------------------------
-    model_name: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
 
 def run_one_trial(

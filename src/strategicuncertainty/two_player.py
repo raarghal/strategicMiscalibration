@@ -57,8 +57,8 @@ class TwoPlayerConfig(BaseGameConfig):
     # -------------------------------------------------------------------------
     # LLM Configuration
     # -------------------------------------------------------------------------
-    model_llm_name: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    user_llm_name: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    model_llm_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    user_llm_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
     # -------------------------------------------------------------------------
     # Prompt Templates (override user template)
