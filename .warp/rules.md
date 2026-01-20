@@ -22,7 +22,7 @@
 
 ## Environment
 - Never commit the `.env` file (it's already in `.gitignore`)
-- The project requires `TOGETHERAI_API_KEY` in `.env`
+- The project requires `TOGETHER_API_KEY` in `.env`
 - Python version: 3.12+ (specified in `.python-version`)
 
 ## Git Workflow
