@@ -2,7 +2,6 @@
 Tests for LLM interface cost tracking functionality.
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
