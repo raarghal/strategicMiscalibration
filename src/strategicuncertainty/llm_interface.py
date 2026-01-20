@@ -1,11 +1,12 @@
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
-import together
+import litellm
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
+from litellm import completion, completion_cost
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
@@ -13,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(ENV_FILE)
+
+# Enable JSON schema validation globally for litellm.
+# This is configured at module import time to ensure all LLM requests use JSON schema validation.
+# Note: This affects all litellm usage in the application, not just this module.
+litellm.enable_json_schema_validation = True
 
 
 # =============================================================================
@@ -83,7 +89,7 @@ def _make_llm_request(
     response_template: type[BaseModel],
     max_tokens: Optional[int] = 256,
     temperature: Optional[float] = 0.01,
-) -> str:
+) -> Tuple[str, float]:
     """
     Make a request to the LLM API with retry logic.
 
@@ -95,12 +101,10 @@ def _make_llm_request(
         temperature: Sampling temperature
 
     Returns:
-        Raw response content as string
+        Tuple of (raw response content as string, cost in dollars)
     """
-    client = together.Together()
-
     try:
-        response = client.chat.completions.create(
+        response = completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
@@ -114,7 +118,13 @@ def _make_llm_request(
         print(f"LLM REQUEST ERROR: {e}")
         raise e
 
-    return response.choices[0].message.content
+    try:
+        cost = completion_cost(completion_response=response)
+    except Exception as e:
+        logger.warning(f"Failed to calculate cost: {e}")
+        cost = 0.0
+
+    return response.choices[0].message.content, cost
 
 
 def query_llm(
@@ -123,7 +133,7 @@ def query_llm(
     response_template: type[BaseModel],
     max_tokens: Optional[int] = 256,
     temperature: Optional[float] = 0.01,
-) -> BaseModel:
+) -> Tuple[BaseModel, float]:
     """
     Query the LLM with a prompt and parse the JSON response.
 
@@ -135,10 +145,10 @@ def query_llm(
         temperature: Sampling temperature
 
     Returns:
-        Parsed response as an instance of response_template
+        Tuple of (parsed response as instance of response_template, cost in dollars)
     """
     try:
-        raw_response = _make_llm_request(
+        raw_response, cost = _make_llm_request(
             model, prompt, response_template, max_tokens, temperature
         )
 
@@ -148,7 +158,7 @@ def query_llm(
 
         try:
             parsed_response = response_template.model_validate_json(raw_response)
-            return parsed_response
+            return parsed_response, cost
         except Exception as e:
             print(f"LLM RESPONSE PARSING ERROR: {e}.")
             print(f"Raw response: {raw_response}")

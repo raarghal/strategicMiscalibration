@@ -271,7 +271,9 @@ def ask_baseline(
         question=question,
         confidence_mode=confidence_mode.value,
     )
-    return query_llm(model_name, prompt, ModelResponse, max_tokens, temperature)
+    response, cost = query_llm(model_name, prompt, ModelResponse, max_tokens, temperature)
+    logger.debug(f"LLM cost: ${cost:.6f}")
+    return response
 
 
 def ask_with_game_context(
@@ -332,7 +334,9 @@ def ask_with_game_context(
         total_model_payoff=total_model_payoff,
         confidence_mode=confidence_mode.value,
     )
-    return query_llm(model_name, prompt, ModelResponse, max_tokens, temperature)
+    response, llm_cost = query_llm(model_name, prompt, ModelResponse, max_tokens, temperature)
+    logger.debug(f"LLM cost: ${llm_cost:.6f}")
+    return response
 
 
 # =============================================================================
