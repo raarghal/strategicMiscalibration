@@ -1,13 +1,12 @@
 """
-Single-player strategic uncertainty experiment.
+Single-player strategic delegation experiment.
 
-This module compares LLM confidence scores in two settings:
-1. Baseline: LLM answers questions without any strategic context
-2. Game: LLM is informed about a user who decides whether to use its answer
-   based on the reported confidence score
+This module compares agent confidence scores in two settings:
+1. Baseline: the agent solves tasks without any strategic context.
+2. Game: the agent knows a user may delegate the task (at cost c) based on the
+   reported confidence score.
 
-We are interested in seeing whether the LLM changes its confidence score
-reports when given the game context.
+We measure whether the strategic framing changes the agent's reported confidence.
 """
 
 import json
@@ -23,18 +22,18 @@ from tqdm import tqdm
 
 from .utils import (
     BaseGameConfig,
-    QuestionData,
     RoundResult,
+    TaskData,
     TrialStatistics,
     aggregate_trial_stats,
-    ask_baseline,
-    ask_with_game_context,
+    compute_agent_stats,
     compute_baseline_stats,
     compute_confidence_comparison_stats,
     compute_mean,
-    compute_model_stats,
-    evaluate_answer,
-    extract_question_from_dataset,
+    evaluate_solution,
+    extract_task_from_dataset,
+    solve_task_with_game_context,
+    solve_task_without_game_context,
     sum_trial_stats,
 )
 
@@ -44,7 +43,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SinglePlayerConfig(BaseGameConfig):
     """
-    Configuration for running the single-player strategic uncertainty experiment.
+    Configuration for running the single-player strategic delegation experiment.
 
     Extends BaseGameConfig with single-player specific settings.
     """
@@ -52,7 +51,7 @@ class SinglePlayerConfig(BaseGameConfig):
     # -------------------------------------------------------------------------
     # LLM Configuration
     # -------------------------------------------------------------------------
-    model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+    agent_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
 
 def run_one_trial(
@@ -65,17 +64,17 @@ def run_one_trial(
     Run a single trial of the experiment.
 
     For each round:
-    1. Sample a question from the dataset
-    2. Ask the question in baseline mode (no game context)
-    3. Ask the same question in game mode (with strategic context)
+    1. Sample a task from the dataset
+    2. Solve the task without strategic context (baseline)
+    3. Solve the same task with strategic context
     4. Record both responses and compare confidence scores
 
     Note: This single-player version does not simulate actual game dynamics.
-    It only measures whether the game framing affects confidence reporting.
+    It only measures whether the strategic framing affects confidence reporting.
 
     Args:
         cfg: Game configuration
-        dataset: The dataset to sample questions from
+        dataset: The dataset to sample tasks from
         trial_idx: Index of this trial
         progress: Progress bar
 
@@ -86,29 +85,29 @@ def run_one_trial(
     dataset_size = len(dataset)
 
     for round_idx in range(cfg.num_rounds):
-        # Sample a random question from the dataset
+        # Sample a random task from the dataset
         sample_idx = random.randint(0, dataset_size - 1)
         sample = dataset[sample_idx]
 
-        # Extract question, correct answer, and difficulty
-        question_data: QuestionData = extract_question_from_dataset(sample)
-        question = question_data["question"]
-        correct_answer = question_data["correct_answer"]
-        difficulty = question_data["difficulty"]
+        # Extract task, correct solution, and difficulty
+        task_data: TaskData = extract_task_from_dataset(sample)
+        task = task_data["task"]
+        correct_solution = task_data["correct_solution"]
+        difficulty = task_data["difficulty"]
 
         # Get baseline response (no game context)
         try:
-            baseline_response = ask_baseline(
-                model_name=cfg.model_name,
-                question=question,
+            baseline_response = solve_task_without_game_context(
+                agent_model_name=cfg.agent_model_name,
+                task=task,
                 confidence_mode=cfg.confidence_mode,
                 template_path=cfg.baseline_template_path,
                 max_tokens=cfg.max_tokens,
                 temperature=cfg.temperature,
             )
-            baseline_answer = baseline_response.answer
+            baseline_solution = baseline_response.solution
             baseline_confidence = baseline_response.confidence
-            baseline_correct = evaluate_answer(baseline_answer, correct_answer)
+            baseline_correct = evaluate_solution(baseline_solution, correct_solution)
         except Exception as e:
             logger.error(
                 f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
@@ -116,15 +115,15 @@ def run_one_trial(
             print(
                 f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
             )
-            baseline_answer = None
+            baseline_solution = None
             baseline_confidence = None
             baseline_correct = None
 
         # Get game context response (no history in single-player mode)
         try:
-            game_response = ask_with_game_context(
-                model_name=cfg.model_name,
-                question=question,
+            agent_response = solve_task_with_game_context(
+                agent_model_name=cfg.agent_model_name,
+                task=task,
                 confidence_mode=cfg.confidence_mode,
                 template_path=cfg.game_template_path,
                 reward=cfg.reward,
@@ -135,38 +134,38 @@ def run_one_trial(
                 max_tokens=cfg.max_tokens,
                 temperature=cfg.temperature,
             )
-            game_answer = game_response.answer
-            game_confidence = game_response.confidence
-            game_correct = evaluate_answer(game_answer, correct_answer)
+            agent_solution = agent_response.solution
+            agent_confidence = agent_response.confidence
+            agent_correct = evaluate_solution(agent_solution, correct_solution)
         except Exception as e:
             logger.error(
                 f"Error in game query (trial {trial_idx}, round {round_idx}): {e}"
             )
             print(f"Error in game query (trial {trial_idx}, round {round_idx}): {e}")
-            game_answer = None
-            game_confidence = None
-            game_correct = None
+            agent_solution = None
+            agent_confidence = None
+            agent_correct = None
 
         # Calculate confidence difference (key metric for strategic behavior)
         confidence_diff = None
-        if baseline_confidence is not None and game_confidence is not None:
-            confidence_diff = game_confidence - baseline_confidence
+        if baseline_confidence is not None and agent_confidence is not None:
+            confidence_diff = agent_confidence - baseline_confidence
 
         # Record the results
         round_result: RoundResult = {
             "round": round_idx,
             "sample_idx": sample_idx,
-            "question": question,
-            "correct_answer": correct_answer,
+            "task": task,
+            "correct_solution": correct_solution,
             "difficulty": difficulty,
             # Baseline results
-            "baseline_answer": baseline_answer,
+            "baseline_solution": baseline_solution,
             "baseline_confidence": baseline_confidence,
             "baseline_correct": baseline_correct,
-            # Game context results
-            "model_answer": game_answer,
-            "model_confidence": game_confidence,
-            "model_correct": game_correct,
+            # Agent results
+            "agent_solution": agent_solution,
+            "agent_confidence": agent_confidence,
+            "agent_correct": agent_correct,
             # Comparison metrics
             "confidence_diff": confidence_diff,
         }
@@ -206,14 +205,14 @@ def compute_trial_statistics(
 
     # Get component statistics
     baseline_stats = compute_baseline_stats(round_results)
-    model_stats = compute_model_stats(round_results, threshold)
+    agent_stats = compute_agent_stats(round_results, threshold)
     comparison_stats = compute_confidence_comparison_stats(round_results)
 
     # Combine all statistics
     stats: TrialStatistics = {
         "num_rounds": len(round_results),
         **baseline_stats,
-        **model_stats,
+        **agent_stats,
         **comparison_stats,
     }
 
@@ -258,11 +257,11 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
     logger.info(f"Dataset loaded with {len(dataset)} samples")
 
     # Print game parameters
-    print("\nGame Parameters:")
+    print("\nInteraction Parameters:")
     print(f"  Reward (r): {cfg.reward}")
-    print(f"  Cost (c): {cfg.cost}")
+    print(f"  Delegation cost (c): {cfg.cost}")
     print(f"  Discount factor (δ): {cfg.discount_factor}")
-    print(f"  User purchasing threshold (θ*): {cfg.compute_threshold():.4f}")
+    print(f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}")
     print(f"  Confidence mode: {cfg.confidence_mode.value}")
     print()
 
@@ -289,8 +288,8 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
         baseline_confidences = aggregate_trial_stats(
             valid_trials, "mean_baseline_confidence"
         )
-        model_accuracies = aggregate_trial_stats(valid_trials, "model_accuracy")
-        model_confidences = aggregate_trial_stats(valid_trials, "mean_model_confidence")
+        agent_accuracies = aggregate_trial_stats(valid_trials, "agent_accuracy")
+        agent_confidences = aggregate_trial_stats(valid_trials, "mean_agent_confidence")
         confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
 
         overall_stats = {
@@ -300,8 +299,8 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
             "mean_baseline_confidence": compute_mean(baseline_confidences),
             "mean_baseline_accuracy": compute_mean(baseline_accuracies),
             # Model (game context)
-            "mean_model_confidence": compute_mean(model_confidences),
-            "mean_model_accuracy": compute_mean(model_accuracies),
+            "mean_agent_confidence": compute_mean(agent_confidences),
+            "mean_agent_accuracy": compute_mean(agent_accuracies),
             # Confidence comparison
             "mean_confidence_diff": compute_mean(confidence_diffs),
             "total_confidence_inflated": sum_trial_stats(
@@ -322,7 +321,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
     results = {
         "timestamp": timestamp,
         "config": {
-            "model_name": cfg.model_name,
+            "agent_model_name": cfg.agent_model_name,
             "dataset_name": cfg.dataset_name,
             "num_trials": cfg.num_trials,
             "num_rounds": cfg.num_rounds,
@@ -370,18 +369,18 @@ def generate_summary_report(
     """
     lines = [
         "=" * 70,
-        "Single-Player Strategic Uncertainty Experiment Results",
+        "Single-Player Strategic Delegation Experiment Results",
         "=" * 70,
         f"Timestamp: {timestamp}",
-        f"Model: {cfg.model_name}",
+        f"Agent model: {cfg.agent_model_name}",
         f"Dataset: {cfg.dataset_name}",
         f"Trials: {cfg.num_trials}, Rounds per trial: {cfg.num_rounds}",
         "-" * 70,
-        "Game Parameters:",
+        "Interaction Parameters:",
         f"  Reward (r): {cfg.reward}",
-        f"  Cost (c): {cfg.cost}",
+        f"  Delegation cost (c): {cfg.cost}",
         f"  Discount factor (δ): {cfg.discount_factor}",
-        f"  User purchasing threshold (θ*): {cfg.compute_threshold():.4f}",
+        f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}",
         f"  Confidence mode: {cfg.confidence_mode.value}",
         "-" * 70,
         "Overall Statistics:",
@@ -400,13 +399,13 @@ def generate_summary_report(
             )
 
         lines.append("")
-        lines.append("Model Performance (with game context):")
-        if overall_stats.get("mean_model_confidence") is not None:
+        lines.append("Agent Performance (strategic context):")
+        if overall_stats.get("mean_agent_confidence") is not None:
             lines.append(
-                f"  Mean confidence: {overall_stats['mean_model_confidence']:.4f}"
+                f"  Mean confidence: {overall_stats['mean_agent_confidence']:.4f}"
             )
-        if overall_stats.get("mean_model_accuracy") is not None:
-            lines.append(f"  Mean accuracy: {overall_stats['mean_model_accuracy']:.4f}")
+        if overall_stats.get("mean_agent_accuracy") is not None:
+            lines.append(f"  Mean accuracy: {overall_stats['mean_agent_accuracy']:.4f}")
 
         lines.append("")
         lines.append("Confidence Comparison (game - baseline):")
@@ -433,7 +432,7 @@ def generate_summary_report(
 if __name__ == "__main__":
     # Default configuration for testing
     config = SinglePlayerConfig(
-        model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        agent_model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
         num_trials=1,
         num_rounds=5,
     )

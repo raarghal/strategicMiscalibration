@@ -15,21 +15,21 @@ __all__ = [
     "TwoPlayerConfig",
     "ConfidenceMode",
     "HistoryEntry",
-    "QuestionData",
+    "TaskData",
     "RoundResult",
     "TrialStatistics",
-    "ModelResponse",
+    "AgentResponse",
     "UserResponse",
-    "evaluate_answer",
-    "extract_question_from_dataset",
+    "evaluate_solution",
+    "extract_task_from_dataset",
     "load_template",
     "query_llm",
 ]
 
 if TYPE_CHECKING:
     from .llm_interface import (
+        AgentResponse,
         ConfidenceMode,
-        ModelResponse,
         UserResponse,
         load_template,
         query_llm,
@@ -39,11 +39,11 @@ if TYPE_CHECKING:
     from .utils import (
         BaseGameConfig,
         HistoryEntry,
-        QuestionData,
         RoundResult,
+        TaskData,
         TrialStatistics,
-        evaluate_answer,
-        extract_question_from_dataset,
+        evaluate_solution,
+        extract_task_from_dataset,
     )
 
 
@@ -53,18 +53,18 @@ def __getattr__(name: str):
         "TwoPlayerConfig",
         "BaseGameConfig",
         "HistoryEntry",
-        "QuestionData",
+        "TaskData",
         "RoundResult",
         "TrialStatistics",
-        "evaluate_answer",
-        "extract_question_from_dataset",
+        "evaluate_solution",
+        "extract_task_from_dataset",
     }:
         module = import_module(".utils", __name__)
         return getattr(module, name)
 
     if name in {
         "ConfidenceMode",
-        "ModelResponse",
+        "AgentResponse",
         "UserResponse",
         "load_template",
         "query_llm",

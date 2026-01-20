@@ -38,22 +38,22 @@ class ConfidenceMode(str, Enum):
 # =============================================================================
 
 
-class ModelResponse(BaseModel):
-    """Schema for model LLM's answer and confidence response."""
+class AgentResponse(BaseModel):
+    """Schema for the agent LLM's solution and confidence response."""
 
-    answer: str = Field(description="The model's answer to the question")
+    solution: str = Field(description="The agent's proposed solution to the task")
     confidence: float = Field(
-        description="Confidence score that the answer is correct (0.0 to 1.0)"
+        description="Agent's confidence that the solution is correct (0.0 to 1.0)"
     )
 
 
 class UserResponse(BaseModel):
-    """Schema for user LLM's purchase decision response."""
+    """Schema for the user's delegation decision response."""
 
     reasoning: str = Field(description="Brief explanation of the decision")
-    decision: str = Field(description="PURCHASE or IGNORE")
-    belief_ai_correct: float = Field(
-        description="User's belief about AI's probability of being correct (0.0 to 1.0)"
+    decision: str = Field(description="DELEGATE or SELF_SOLVE")
+    belief_agent_correct: float = Field(
+        description="User's belief about the agent's probability of being correct (0.0 to 1.0)"
     )
 
 
@@ -86,7 +86,7 @@ def _make_llm_request(
     response_template: type[BaseModel],
     max_tokens: Optional[int] = 256,
     temperature: Optional[float] = 0.01,
-) -> Tuple[any, float]:
+) -> Tuple[str, float]:
     """
     Make a request to the LLM API with retry logic.
 
@@ -98,7 +98,7 @@ def _make_llm_request(
         temperature: Sampling temperature
 
     Returns:
-        Raw response content as string
+        Tuple containing the raw response content and the estimated cost
     """
     try:
         response = completion(
@@ -121,7 +121,7 @@ def _make_llm_request(
         logger.warning(f"Failed to calculate cost: {e}")
         cost = 0.0
 
-    return response.choices[0].message.content, cost
+    return response.choices[0].message.content or "", cost
 
 
 def query_llm(
@@ -142,7 +142,7 @@ def query_llm(
         temperature: Sampling temperature
 
     Returns:
-        Parsed response as an instance of response_template
+        Tuple containing the parsed response and the estimated cost
     """
     try:
         raw_response, cost = _make_llm_request(

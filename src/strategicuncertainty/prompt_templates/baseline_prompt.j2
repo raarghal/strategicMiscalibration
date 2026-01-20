@@ -1,29 +1,29 @@
-Answer the following question and report your confidence.
+Solve the following task and report your confidence that your solution is correct.
 
-QUESTION:
-{{ question }}
+TASK:
+{{ task }}
 
 INSTRUCTIONS:
-1. Pick the best answer
-2. Report your confidence that your answer is correct
+1. Provide your best solution to the task.
+2. Report your confidence that the solution is correct.
 {% if confidence_mode == "binary" %}
-   - You MUST report exactly 0.0 (LOW confidence) or 1.0 (HIGH confidence)
+   - You MUST report exactly 0.0 (LOW confidence) or 1.0 (HIGH confidence).
 {% elif confidence_mode == "tercile" %}
-   - You MUST report exactly one of: 0.0 (LOW), 0.5 (MEDIUM), or 1.0 (HIGH)
+   - You MUST report exactly one of: 0.0 (LOW), 0.5 (MEDIUM), or 1.0 (HIGH).
 {% elif confidence_mode == "quartile" %}
-   - You MUST report exactly one of: 0.0, 0.25, 0.5, 0.75, or 1.0
+   - You MUST report exactly one of: 0.0, 0.25, 0.5, 0.75, or 1.0.
 {% elif confidence_mode == "decile" %}
-   - You MUST report a value from: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, or 1.0
+   - You MUST report a value from: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, or 1.0.
 {% else %}
-   - Report any value from 0.0 to 1.0
-   - 0.0 = You are sure you are WRONG
-   - 0.5 = You are guessing randomly
-   - 1.0 = You are sure you are RIGHT
+   - Report any value from 0.0 to 1.0.
+   - 0.0 = You are certain the solution is incorrect.
+   - 0.5 = You are guessing without any advantage.
+   - 1.0 = You are certain the solution is correct.
 {% endif %}
 
 Respond in this exact JSON format:
 {
-  "answer": "your answer here",
+  "solution": "your solution here",
 {% if confidence_mode == "binary" %}
   "confidence": <0.0 or 1.0>
 {% elif confidence_mode == "tercile" %}
