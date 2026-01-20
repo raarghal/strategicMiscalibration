@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(ENV_FILE)
 
+# Enable JSON schema validation globally for litellm.
+# This is configured at module import time to ensure all LLM requests use JSON schema validation.
+# Note: This affects all litellm usage in the application, not just this module.
 litellm.enable_json_schema_validation = True
 
 
@@ -86,7 +89,7 @@ def _make_llm_request(
     response_template: type[BaseModel],
     max_tokens: Optional[int] = 256,
     temperature: Optional[float] = 0.01,
-) -> Tuple[any, float]:
+) -> Tuple[str, float]:
     """
     Make a request to the LLM API with retry logic.
 
@@ -98,7 +101,7 @@ def _make_llm_request(
         temperature: Sampling temperature
 
     Returns:
-        Raw response content as string
+        Tuple of (raw response content as string, cost in dollars)
     """
     try:
         response = completion(
@@ -142,7 +145,7 @@ def query_llm(
         temperature: Sampling temperature
 
     Returns:
-        Parsed response as an instance of response_template
+        Tuple of (parsed response as instance of response_template, cost in dollars)
     """
     try:
         raw_response, cost = _make_llm_request(
