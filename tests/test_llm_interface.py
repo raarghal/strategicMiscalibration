@@ -93,7 +93,9 @@ class TestCostTracking:
         # Mock the completion response
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '{"answer": "test answer", "value": 42.5}'
+        mock_response.choices[
+            0
+        ].message.content = '{"answer": "test answer", "value": 42.5}'
         mock_completion.return_value = mock_response
 
         # Mock the cost calculation
