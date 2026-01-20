@@ -91,7 +91,7 @@ TOGETHERAI_API_KEY="<your-api-key>"
 
 ## Code Style
 - Line length: 119 characters
-- Python 3.10+ syntax
+- Python 3.12+ syntax
 - Google-style docstrings
 - Ruff for linting and formatting
 
