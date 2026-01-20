@@ -86,7 +86,7 @@ uv sync
 ## Environment Variables
 The project requires a `.env` file in the project root with:
 ```
-TOGETHERAI_API_KEY="<your-api-key>"
+TOGETHER_API_KEY="<your-api-key>"
 ```
 
 ## Code Style
