@@ -7,173 +7,25 @@ This module contains shared functionality used by both single_player.py and two_
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
+from .datatypes import (
+    BaseGameConfig,
+    HistoryEntry,
+    RoundResult,
+    TaskData,
+)
 from .llm_interface import (
     AgentBaselineResponse,
     AgentGameResponse,
-    ConfidenceMode,
+    UserDecisionResponse,
+    UserPosteriorResponse,
     load_template,
     query_llm,
 )
 
 logger = logging.getLogger(__name__)
-
-TEMPLATE_DIR = Path(__file__).parent / "prompt_templates"
-
-
-# =============================================================================
-# Type Definitions
-# =============================================================================
-
-
-class TaskData(TypedDict):
-    """Extracted task data from a dataset sample."""
-
-    task: str
-    correct_solution: str
-    difficulty: Optional[str]
-
-
-class RoundResult(TypedDict, total=False):
-    """Result from a single round of the game."""
-
-    round: int
-    sample_idx: int
-    task: str
-    difficulty: Optional[str]
-    correct_solution: str
-    # Baseline (no strategic context)
-    baseline_solution: Optional[str]
-    baseline_confidence: Optional[float]
-    baseline_correct: Optional[bool]
-    # Agent with strategic context
-    agent_solution: Optional[str]
-    agent_confidence: Optional[float]
-    agent_correct: Optional[bool]
-    # Comparison metrics
-    confidence_diff: Optional[float]
-    # User behaviour (two-player mode)
-    user_decision: Optional[str]
-    user_reasoning: Optional[str]
-    user_belief_agent_correct: Optional[float]
-    # Additional user beliefs
-    user_belief_agent_ability: Optional[float]
-    user_belief_honesty: Optional[float]
-    # Posterior beliefs (after observing delegated outcome)
-    posterior_user_belief_agent_ability: Optional[float]
-    posterior_user_belief_honesty: Optional[float]
-    # Payoffs
-    user_payoff: Optional[float]
-    agent_payoff: Optional[float]
-
-
-class HistoryEntry(TypedDict, total=False):
-    """A single entry in the interaction history."""
-
-    round: int
-    reported_confidence: float
-    was_correct: bool
-    user_decision: str
-    user_payoff: float
-    agent_payoff: float
-
-
-class TrialStatistics(TypedDict, total=False):
-    """Statistics computed for a single trial."""
-
-    num_rounds: int
-    # Baseline stats
-    baseline_accuracy: Optional[float]
-    mean_baseline_confidence: Optional[float]
-    # Agent stats
-    agent_accuracy: float
-    mean_agent_confidence: float
-    high_confidence_count: int
-    high_confidence_accuracy: Optional[float]
-    low_confidence_count: int
-    low_confidence_accuracy: Optional[float]
-    # Confidence comparison
-    mean_confidence_diff: Optional[float]
-    confidence_inflated_count: int
-    confidence_deflated_count: int
-    confidence_unchanged_count: int
-    # User behaviour (two-player mode)
-    delegation_count: int
-    self_solve_count: int
-    delegation_rate: float
-    # User beliefs (prior to posterior update)
-    mean_user_belief_agent_correct: Optional[float]
-    mean_user_belief_agent_ability: Optional[float]
-    mean_user_belief_honesty: Optional[float]
-    # Posterior user beliefs (after observing delegated outcome)
-    mean_posterior_user_belief_agent_ability: Optional[float]
-    mean_posterior_user_belief_honesty: Optional[float]
-    # Calibration/error
-    user_belief_error: Optional[float]
-    # Payoffs
-    total_user_payoff: float
-    total_agent_payoff: float
-    mean_user_payoff: float
-    mean_agent_payoff: float
-
-
-# =============================================================================
-# Base Configuration
-# =============================================================================
-
-
-@dataclass
-class BaseGameConfig:
-    """
-    Base configuration shared by all game experiments.
-
-    Contains common settings for LLM queries, dataset, game parameters,
-    confidence reporting, and experiment settings.
-    """
-
-    # LLM configuration
-    user_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    agent_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    max_tokens: int = 512
-    temperature: float = 0.0
-
-    # Prompt templates
-    baseline_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "baseline_agent_prompt.j2"
-    )
-    game_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "game_agent_prompt.j2"
-    )
-
-    # Dataset
-    dataset_name: str = "watermelonhjg/TAL-SCQ5K-EN-R1"
-
-    # Game parameters
-    reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
-    cost: float = 0.2  # Cost the user pays to delegate the task
-    discount_factor: float = 0.9  # δ: discount factor for future payoffs
-    effort: float = 0.5  # Effort cost the user pays to self-solve the task
-
-    # Confidence reporting
-    confidence_mode: ConfidenceMode = ConfidenceMode.CONTINUOUS
-
-    # Experiment settings
-    num_trials: int = 1
-    num_rounds: int = 10
-    output_dir: str = "outputs"
-    seed: int = 42
-
-    def compute_threshold(self) -> float:
-        """
-        Compute the delegation threshold θ* for the user.
-
-        θ* = 0.5 + c/r
-        The user delegates when their belief ≥ θ*.
-        """
-        return 0.5 + self.cost / self.reward
 
 
 # =============================================================================
@@ -280,6 +132,105 @@ def solve_task_with_game_context(
     # print(prompt)
     response, _ = query_llm(
         cfg.agent_model_name, prompt, AgentGameResponse, cfg.max_tokens, cfg.temperature
+    )
+    return response
+
+
+def query_user_delegation(
+    cfg: BaseGameConfig,
+    reported_confidence: float,
+    history: List[HistoryEntry],
+) -> UserDecisionResponse:
+    """Query the user LLM with the reported confidence and interaction history."""
+    logger.debug(f"Asking user LLM with reported confidence {reported_confidence}")
+    threshold = cfg.compute_threshold()
+
+    delegation_count = 0
+    delegated_correct = 0
+    high_confidence_delegation_count = 0
+    high_confidence_delegated_correct = 0
+    total_payoff = 0.0
+
+    for record in history:
+        total_payoff += record.get("user_payoff", 0)
+        if record.get("user_decision") == "DELEGATE":
+            delegation_count += 1
+            if record.get("was_correct"):
+                delegated_correct += 1
+            if record.get("reported_confidence", 0) >= threshold:
+                high_confidence_delegation_count += 1
+                if record.get("was_correct"):
+                    high_confidence_delegated_correct += 1
+
+    delegated_accuracy = (
+        delegated_correct / delegation_count if delegation_count > 0 else "N/A"
+    )
+    high_confidence_delegated_accuracy = (
+        high_confidence_delegated_correct / high_confidence_delegation_count
+        if high_confidence_delegation_count > 0
+        else "N/A"
+    )
+
+    prompt = load_template(
+        cfg.user_decision_template_path,
+        reported_confidence=reported_confidence,
+        history=history,
+        threshold=threshold,
+        reward=cfg.reward,
+        cost=cfg.cost,
+        effort=cfg.effort,
+        delegation_count=delegation_count,
+        delegated_accuracy=delegated_accuracy,
+        high_confidence_delegation_count=high_confidence_delegation_count,
+        high_confidence_delegated_accuracy=high_confidence_delegated_accuracy,
+        total_payoff=total_payoff,
+        confidence_mode=cfg.confidence_mode.value,
+    )
+
+    response, _ = query_llm(
+        cfg.user_model_name,
+        prompt,
+        UserDecisionResponse,
+        cfg.max_tokens,
+        cfg.temperature,
+    )
+    return response
+
+
+def query_user_posterior(
+    cfg: BaseGameConfig,
+    reported_confidence: float,
+    agent_correct: bool,
+    prior_beliefs: Dict[str, Optional[float]],
+    history: List[HistoryEntry],
+) -> UserPosteriorResponse:
+    """Query the user LLM to update beliefs after observing the delegated outcome."""
+    logger.debug(
+        f"Asking user LLM for posterior update (reported_confidence={reported_confidence}, agent_correct={agent_correct})"
+    )
+    threshold = cfg.compute_threshold()
+
+    prompt = load_template(
+        cfg.user_posterior_template_path,
+        reported_confidence=reported_confidence,
+        agent_correct=agent_correct,
+        prior_belief_agent_correct=prior_beliefs.get("belief_agent_correct"),
+        prior_belief_agent_ability=prior_beliefs.get("belief_agent_ability"),
+        prior_belief_honesty=prior_beliefs.get("belief_honesty"),
+        history=history,
+        threshold=threshold,
+        reward=cfg.reward,
+        cost=cfg.cost,
+        effort=cfg.effort,
+        confidence_mode=cfg.confidence_mode.value,
+    )
+
+    response, _ = query_llm(
+        cfg.user_model_name,
+        prompt,
+        UserPosteriorResponse,
+        cfg.max_tokens,
+        cfg.temperature,
     )
     return response
 

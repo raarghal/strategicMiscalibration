@@ -15,7 +15,6 @@ import json
 import logging
 import random
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -23,19 +22,14 @@ import datasets
 import pandas as pd
 from tqdm import tqdm
 
-from .llm_interface import (
-    UserDecisionResponse,
-    UserPosteriorResponse,
-    load_template,
-    query_llm,
-)
-from .utils import (
-    TEMPLATE_DIR,
+from .datatypes import (
     BaseGameConfig,
     HistoryEntry,
     RoundResult,
     TaskData,
     TrialStatistics,
+)
+from .utils import (
     aggregate_trial_stats,
     compute_agent_stats,
     compute_baseline_stats,
@@ -43,6 +37,8 @@ from .utils import (
     compute_mean,
     evaluate_solution,
     extract_task_from_dataset,
+    query_user_delegation,
+    query_user_posterior,
     solve_task_with_game_context,
     solve_task_without_game_context,
     sum_trial_stats,
@@ -53,123 +49,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class TwoPlayerConfig(BaseGameConfig):
-    """
-    Configuration for running the two-player strategic delegation experiment.
-
-    Extends BaseGameConfig with two-player specific settings.
-    """
-
-    # Prompt template for the user (agent templates inherited from BaseGameConfig)
-    user_decision_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "decision_user_prompt.j2"
-    )
-
-    user_posterior_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "posterior_user_prompt.j2"
-    )
-
-
-def query_user_delegation(
-    cfg: TwoPlayerConfig,
-    reported_confidence: float,
-    history: List[HistoryEntry],
-) -> UserDecisionResponse:
-    """Query the user LLM with the reported confidence and interaction history."""
-    logger.debug(f"Asking user LLM with reported confidence {reported_confidence}")
-    threshold = cfg.compute_threshold()
-
-    delegation_count = 0
-    delegated_correct = 0
-    high_confidence_delegation_count = 0
-    high_confidence_delegated_correct = 0
-    total_payoff = 0.0
-
-    for record in history:
-        total_payoff += record.get("user_payoff", 0)
-        if record.get("user_decision") == "DELEGATE":
-            delegation_count += 1
-            if record.get("was_correct"):
-                delegated_correct += 1
-            if record.get("reported_confidence", 0) >= threshold:
-                high_confidence_delegation_count += 1
-                if record.get("was_correct"):
-                    high_confidence_delegated_correct += 1
-
-    delegated_accuracy = (
-        delegated_correct / delegation_count if delegation_count > 0 else "N/A"
-    )
-    high_confidence_delegated_accuracy = (
-        high_confidence_delegated_correct / high_confidence_delegation_count
-        if high_confidence_delegation_count > 0
-        else "N/A"
-    )
-
-    prompt = load_template(
-        cfg.user_decision_template_path,
-        reported_confidence=reported_confidence,
-        history=history,
-        threshold=threshold,
-        reward=cfg.reward,
-        cost=cfg.cost,
-        effort=cfg.effort,
-        delegation_count=delegation_count,
-        delegated_accuracy=delegated_accuracy,
-        high_confidence_delegation_count=high_confidence_delegation_count,
-        high_confidence_delegated_accuracy=high_confidence_delegated_accuracy,
-        total_payoff=total_payoff,
-        confidence_mode=cfg.confidence_mode.value,
-    )
-
-    response, _ = query_llm(
-        cfg.user_model_name,
-        prompt,
-        UserDecisionResponse,
-        cfg.max_tokens,
-        cfg.temperature,
-    )
-    return response
-
-
-def query_user_posterior(
-    cfg: TwoPlayerConfig,
-    reported_confidence: float,
-    agent_correct: bool,
-    prior_beliefs: Dict[str, Optional[float]],
-    history: List[HistoryEntry],
-) -> UserPosteriorResponse:
-    """Query the user LLM to update beliefs after observing the delegated outcome."""
-    logger.debug(
-        f"Asking user LLM for posterior update (reported_confidence={reported_confidence}, agent_correct={agent_correct})"
-    )
-    threshold = cfg.compute_threshold()
-
-    prompt = load_template(
-        cfg.user_posterior_template_path,
-        reported_confidence=reported_confidence,
-        agent_correct=agent_correct,
-        prior_belief_agent_correct=prior_beliefs.get("belief_agent_correct"),
-        prior_belief_agent_ability=prior_beliefs.get("belief_agent_ability"),
-        prior_belief_honesty=prior_beliefs.get("belief_honesty"),
-        history=history,
-        threshold=threshold,
-        reward=cfg.reward,
-        cost=cfg.cost,
-        effort=cfg.effort,
-        confidence_mode=cfg.confidence_mode.value,
-    )
-
-    response, _ = query_llm(
-        cfg.user_model_name,
-        prompt,
-        UserPosteriorResponse,
-        cfg.max_tokens,
-        cfg.temperature,
-    )
-    return response
 
 
 def compute_payoffs(
@@ -193,7 +72,7 @@ def compute_payoffs(
 
 
 def run_one_trial(
-    cfg: TwoPlayerConfig,
+    cfg: BaseGameConfig,
     dataset: datasets.Dataset,
     trial_idx: int,
     progress: Optional[tqdm] = None,
@@ -386,7 +265,7 @@ def run_one_trial(
 
 
 def compute_trial_statistics(
-    round_results: List[RoundResult], cfg: TwoPlayerConfig
+    round_results: List[RoundResult], cfg: BaseGameConfig
 ) -> TrialStatistics:
     """Compute summary statistics for a single trial."""
     if not round_results:
@@ -469,7 +348,7 @@ def compute_trial_statistics(
     return stats
 
 
-def run_trials(cfg: TwoPlayerConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
+def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
     """Run multiple trials of the two-player experiment and save results."""
     random.seed(cfg.seed)
     logger.info(f"Starting two-player experiment with seed {cfg.seed}")
@@ -712,7 +591,7 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
 
 
 def generate_summary_report(
-    cfg: TwoPlayerConfig,
+    cfg: BaseGameConfig,
     timestamp: str,
     overall_stats: Dict[str, Any],
 ) -> str:
@@ -902,7 +781,7 @@ def generate_summary_report(
 
 
 def run_experiments(
-    configs: List[TwoPlayerConfig], output_path: Path | str
+    configs: List[BaseGameConfig], output_path: Path | str
 ) -> pd.DataFrame:
     """
     Run experiments for multiple configurations and export the results.
@@ -992,7 +871,7 @@ if __name__ == "__main__":
     )
     deltas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     sweep_configs = [
-        TwoPlayerConfig(
+        BaseGameConfig(
             # model_name="together_ai/openai/gpt-oss-20b",
             num_trials=5,
             num_rounds=2,

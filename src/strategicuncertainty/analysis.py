@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -55,8 +56,10 @@ plt.xlabel("Discount Factor", fontsize=12)
 plt.ylabel("Confidence Difference", fontsize=12)
 plt.title("Confidence Difference vs Discount Factor by Round", fontsize=14)
 plt.tight_layout()
+
+timestamp = time.strftime("%Y%m%d_%H%M%S")
 plt.savefig(
-    figure_dir / "confidence_diff_vs_discount_factor_by_round.pdf",
+    figure_dir / f"confidence_diff_vs_discount_factor_by_round_{timestamp}.pdf",
     format="pdf",
     dpi=1200,
 )
