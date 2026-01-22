@@ -902,24 +902,20 @@ def generate_summary_report(
 
 
 def run_experiments(
-    configs: List[TwoPlayerConfig], csv_path: Path | str
+    configs: List[TwoPlayerConfig], output_path: Path | str
 ) -> pd.DataFrame:
     """
-    Run experiments for multiple configurations and export a single CSV file
-    containing parameters and per-round results for easy analysis.
+    Run experiments for multiple configurations and export the results.
 
-    Each row of the CSV corresponds to one round of one trial of one config.
-    It includes:
-    - all keys from the "config" object (parameters)
-    - trial_idx, num_rounds_completed, timestamp
-    - all fields from the round result (task, confidence, decisions, payoffs, etc.)
+    Saves two files in the output_path directory:
+    - results.csv: Contains all per-round rows, with constant fields removed.
+    - config.json: Contains all fields that were constant across every row.
 
     Returns:
-        pandas.DataFrame containing all per-round rows merged with parameters.
+        pandas.DataFrame containing all per-round rows.
     """
 
-    # Prepare CSV writer
-    fieldnames: List[str] = []
+    # Prepare rows buffer
     rows_buffer: List[Dict[str, Any]] = []
 
     # Create a tqdm progress bar across all configs and trials/rounds
@@ -950,22 +946,41 @@ def run_experiments(
                     del row["task"]
                 rows_buffer.append(row)
 
-                # Track fieldnames (union of all seen keys)
-                for k in row.keys():
-                    if k not in fieldnames:
-                        fieldnames.append(k)
-
     # Close progress bar
     sweep_progress.close()
 
-    # Create DataFrame and write CSV via pandas
-    df = pd.DataFrame(rows_buffer, columns=fieldnames)
-    csv_path_obj = Path(csv_path)
-    csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(csv_path_obj, index=False)
+    if not rows_buffer:
+        return pd.DataFrame()
 
-    # Return DataFrame
-    return df
+    # Create DataFrame
+    df = pd.DataFrame(rows_buffer)
+
+    # Identify constant columns
+    constant_config = {}
+    constant_cols = []
+    for col in df.columns:
+        if df[col].nunique(dropna=False) <= 1:
+            val = df[col].iloc[0] if not df.empty else None
+            constant_config[col] = val
+            constant_cols.append(col)
+
+    # Drop constant columns from DataFrame
+    df_trimmed = df.drop(columns=constant_cols)
+
+    # Ensure output directory exists
+    output_dir = Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write constant config to json
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(constant_config, f, indent=4, default=str)
+
+    # Write trimmed DataFrame to CSV
+    df_trimmed.to_csv(output_dir / "results.csv", index=False)
+
+    # Return the full DataFrame (or df_trimmed based on preference,
+    # but the request implies returning the dataframe after processing)
+    return df_trimmed
 
 
 if __name__ == "__main__":
@@ -973,13 +988,13 @@ if __name__ == "__main__":
     output_filename = (
         Path(__file__).parent.parent.parent
         / "outputs"
-        / f"sweep_two_player_{timestamp}.csv"
+        / f"sweep_two_player_{timestamp}"
     )
     deltas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     sweep_configs = [
         TwoPlayerConfig(
             # model_name="together_ai/openai/gpt-oss-20b",
-            num_trials=1,
+            num_trials=5,
             num_rounds=2,
             discount_factor=delta,
         )
