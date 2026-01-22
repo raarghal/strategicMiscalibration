@@ -13,7 +13,6 @@ import json
 import logging
 import random
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -37,25 +36,15 @@ from .utils import (
     sum_trial_stats,
 )
 
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class SinglePlayerConfig(BaseGameConfig):
-    """
-    Configuration for running the single-player strategic delegation experiment.
-
-    Extends BaseGameConfig with single-player specific settings.
-    """
-
-    # -------------------------------------------------------------------------
-    # LLM Configuration
-    # -------------------------------------------------------------------------
-    agent_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-
-
 def run_one_trial(
-    cfg: SinglePlayerConfig,
+    cfg: BaseGameConfig,
     dataset: datasets.Dataset,
     trial_idx: int,
     progress: tqdm,
@@ -98,7 +87,7 @@ def run_one_trial(
         # Get baseline response (no game context)
         try:
             baseline_response = solve_task_without_game_context(
-                agent_model_name=cfg.agent_model_name,
+                model_name=cfg.model_name,
                 task=task,
                 confidence_mode=cfg.confidence_mode,
                 template_path=cfg.baseline_template_path,
@@ -122,7 +111,7 @@ def run_one_trial(
         # Get game context response (no history in single-player mode)
         try:
             agent_response = solve_task_with_game_context(
-                agent_model_name=cfg.agent_model_name,
+                model_name=cfg.model_name,
                 task=task,
                 confidence_mode=cfg.confidence_mode,
                 template_path=cfg.game_template_path,
@@ -131,6 +120,7 @@ def run_one_trial(
                 discount_factor=cfg.discount_factor,
                 threshold=cfg.compute_threshold(),
                 history=None,
+                effort=cfg.effort,
                 max_tokens=cfg.max_tokens,
                 temperature=cfg.temperature,
             )
@@ -186,7 +176,7 @@ def run_one_trial(
 
 
 def compute_trial_statistics(
-    round_results: List[RoundResult], cfg: SinglePlayerConfig
+    round_results: List[RoundResult], cfg: BaseGameConfig
 ) -> TrialStatistics:
     """
     Compute summary statistics for a single trial.
@@ -219,7 +209,7 @@ def compute_trial_statistics(
     return stats
 
 
-def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
+def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     """
     Run multiple trials of the experiment and save results.
 
@@ -260,6 +250,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
     print("\nInteraction Parameters:")
     print(f"  Reward (r): {cfg.reward}")
     print(f"  Delegation cost (c): {cfg.cost}")
+    print(f"  Effort (e): {cfg.effort}")
     print(f"  Discount factor (δ): {cfg.discount_factor}")
     print(f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}")
     print(f"  Confidence mode: {cfg.confidence_mode.value}")
@@ -273,6 +264,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
         logger.debug(f"Starting trial {trial_idx}")
         trial_result = run_one_trial(cfg, dataset, trial_idx, progress)
         all_trial_results.append(trial_result)
+        # time.sleep(2)
 
     progress.close()
 
@@ -321,7 +313,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
     results = {
         "timestamp": timestamp,
         "config": {
-            "agent_model_name": cfg.agent_model_name,
+            "model_name": cfg.model_name,
             "dataset_name": cfg.dataset_name,
             "num_trials": cfg.num_trials,
             "num_rounds": cfg.num_rounds,
@@ -330,6 +322,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
             "reward": cfg.reward,
             "cost": cfg.cost,
             "discount_factor": cfg.discount_factor,
+            "effort": cfg.effort,
             "threshold": cfg.compute_threshold(),
             "seed": cfg.seed,
         },
@@ -354,7 +347,7 @@ def run_trials(cfg: SinglePlayerConfig) -> Dict[str, Any]:
 
 
 def generate_summary_report(
-    cfg: SinglePlayerConfig, timestamp: str, overall_stats: Dict[str, Any]
+    cfg: BaseGameConfig, timestamp: str, overall_stats: Dict[str, Any]
 ) -> str:
     """
     Generate a human-readable summary report.
@@ -372,13 +365,14 @@ def generate_summary_report(
         "Single-Player Strategic Delegation Experiment Results",
         "=" * 70,
         f"Timestamp: {timestamp}",
-        f"Agent model: {cfg.agent_model_name}",
+        f"Agent model: {cfg.model_name}",
         f"Dataset: {cfg.dataset_name}",
         f"Trials: {cfg.num_trials}, Rounds per trial: {cfg.num_rounds}",
         "-" * 70,
         "Interaction Parameters:",
         f"  Reward (r): {cfg.reward}",
         f"  Delegation cost (c): {cfg.cost}",
+        f"  Effort (e): {cfg.effort}",
         f"  Discount factor (δ): {cfg.discount_factor}",
         f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}",
         f"  Confidence mode: {cfg.confidence_mode.value}",
@@ -431,10 +425,9 @@ def generate_summary_report(
 
 if __name__ == "__main__":
     # Default configuration for testing
-    config = SinglePlayerConfig(
-        agent_model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        num_trials=1,
-        num_rounds=5,
+    config = BaseGameConfig(
+        num_trials=5,
+        num_rounds=2,
     )
 
     results = run_trials(config)

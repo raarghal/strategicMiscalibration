@@ -20,9 +20,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import datasets
+import pandas as pd
 from tqdm import tqdm
 
-from .llm_interface import UserResponse, load_template, query_llm
+from .llm_interface import (
+    UserDecisionResponse,
+    UserPosteriorResponse,
+    load_template,
+    query_llm,
+)
 from .utils import (
     TEMPLATE_DIR,
     BaseGameConfig,
@@ -42,6 +48,10 @@ from .utils import (
     sum_trial_stats,
 )
 
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -53,11 +63,13 @@ class TwoPlayerConfig(BaseGameConfig):
     Extends BaseGameConfig with two-player specific settings.
     """
 
-    user_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-
     # Prompt template for the user (agent templates inherited from BaseGameConfig)
-    user_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "user_prompt.j2"
+    user_decision_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "decision_user_prompt.j2"
+    )
+
+    user_posterior_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "posterior_user_prompt.j2"
     )
 
 
@@ -65,7 +77,7 @@ def query_user_delegation(
     cfg: TwoPlayerConfig,
     reported_confidence: float,
     history: List[HistoryEntry],
-) -> UserResponse:
+) -> UserDecisionResponse:
     """Query the user LLM with the reported confidence and interaction history."""
     logger.debug(f"Asking user LLM with reported confidence {reported_confidence}")
     threshold = cfg.compute_threshold()
@@ -97,12 +109,13 @@ def query_user_delegation(
     )
 
     prompt = load_template(
-        cfg.user_template_path,
+        cfg.user_decision_template_path,
         reported_confidence=reported_confidence,
         history=history,
         threshold=threshold,
         reward=cfg.reward,
         cost=cfg.cost,
+        effort=cfg.effort,
         delegation_count=delegation_count,
         delegated_accuracy=delegated_accuracy,
         high_confidence_delegation_count=high_confidence_delegation_count,
@@ -112,7 +125,49 @@ def query_user_delegation(
     )
 
     response, _ = query_llm(
-        cfg.user_model_name, prompt, UserResponse, cfg.max_tokens, cfg.temperature
+        cfg.user_model_name,
+        prompt,
+        UserDecisionResponse,
+        cfg.max_tokens,
+        cfg.temperature,
+    )
+    return response
+
+
+def query_user_posterior(
+    cfg: TwoPlayerConfig,
+    reported_confidence: float,
+    agent_correct: bool,
+    prior_beliefs: Dict[str, Optional[float]],
+    history: List[HistoryEntry],
+) -> UserPosteriorResponse:
+    """Query the user LLM to update beliefs after observing the delegated outcome."""
+    logger.debug(
+        f"Asking user LLM for posterior update (reported_confidence={reported_confidence}, agent_correct={agent_correct})"
+    )
+    threshold = cfg.compute_threshold()
+
+    prompt = load_template(
+        cfg.user_posterior_template_path,
+        reported_confidence=reported_confidence,
+        agent_correct=agent_correct,
+        prior_belief_agent_correct=prior_beliefs.get("belief_agent_correct"),
+        prior_belief_agent_ability=prior_beliefs.get("belief_agent_ability"),
+        prior_belief_honesty=prior_beliefs.get("belief_honesty"),
+        history=history,
+        threshold=threshold,
+        reward=cfg.reward,
+        cost=cfg.cost,
+        effort=cfg.effort,
+        confidence_mode=cfg.confidence_mode.value,
+    )
+
+    response, _ = query_llm(
+        cfg.user_model_name,
+        prompt,
+        UserPosteriorResponse,
+        cfg.max_tokens,
+        cfg.temperature,
     )
     return response
 
@@ -122,14 +177,17 @@ def compute_payoffs(
     agent_correct: bool,
     reward: float,
     cost: float,
+    effort: float,
 ) -> Dict[str, float]:
-    """Compute payoffs for both players based on the user's decision and agent correctness."""
+    """Compute payoffs for both players based on the user's decision, agent correctness, and self-solve effort."""
     if user_decision == "DELEGATE":
         agent_payoff = cost
         user_payoff = reward - cost if agent_correct else -cost
     else:
+        # User self-solves:
+        # Deterministic outcome: earns reward minus effort cost
         agent_payoff = 0.0
-        user_payoff = reward if random.random() < 0.5 else 0.0
+        user_payoff = reward - effort
 
     return {"user_payoff": user_payoff, "agent_payoff": agent_payoff}
 
@@ -166,12 +224,8 @@ def run_one_trial(
 
         try:
             baseline_response = solve_task_without_game_context(
-                agent_model_name=cfg.agent_model_name,
+                cfg=cfg,
                 task=task,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.baseline_template_path,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
             )
             baseline_solution = baseline_response.solution
             baseline_confidence = baseline_response.confidence
@@ -189,20 +243,13 @@ def run_one_trial(
 
         try:
             agent_response = solve_task_with_game_context(
-                agent_model_name=cfg.agent_model_name,
+                cfg=cfg,
                 task=task,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.game_template_path,
-                reward=cfg.reward,
-                cost=cfg.cost,
-                discount_factor=cfg.discount_factor,
-                threshold=cfg.compute_threshold(),
                 history=agent_history,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
             )
             agent_solution = agent_response.solution
             agent_confidence = agent_response.confidence
+            agent_reasoning = agent_response.reasoning
             agent_correct = evaluate_solution(agent_solution, correct_solution)
         except Exception as exc:
             logger.error(
@@ -211,6 +258,7 @@ def run_one_trial(
             print(f"Error in agent query (trial {trial_idx}, round {round_idx}): {exc}")
             agent_solution = None
             agent_confidence = None
+            agent_reasoning = None
             agent_correct = None
 
         if agent_confidence is None:
@@ -222,7 +270,9 @@ def run_one_trial(
             user_response = query_user_delegation(cfg, agent_confidence, history)
             user_decision = user_response.decision.upper()
             user_reasoning = user_response.reasoning
-            user_belief = user_response.belief_agent_correct
+            user_belief_agent_correct = user_response.belief_agent_correct
+            user_belief_agent_ability = user_response.belief_agent_ability
+            user_belief_honesty = user_response.belief_honesty
 
             if user_decision not in {"DELEGATE", "SELF_SOLVE"}:
                 user_decision = (
@@ -235,7 +285,9 @@ def run_one_trial(
             print(f"Error in user query (trial {trial_idx}, round {round_idx}): {exc}")
             user_decision = None
             user_reasoning = None
-            user_belief = None
+            user_belief_agent_correct = None
+            user_belief_agent_ability = None
+            user_belief_honesty = None
 
         if user_decision is None:
             if progress:
@@ -243,12 +295,46 @@ def run_one_trial(
             continue
 
         payoffs = compute_payoffs(
-            user_decision, bool(agent_correct), cfg.reward, cfg.cost
+            user_decision, bool(agent_correct), cfg.reward, cfg.cost, cfg.effort
         )
 
         confidence_diff = None
         if baseline_confidence is not None and agent_confidence is not None:
             confidence_diff = agent_confidence - baseline_confidence
+
+        # If delegated, ask user to update posterior beliefs after observing outcome
+        posterior_user_belief_agent_ability = None
+        posterior_user_belief_honesty = None
+        if user_decision == "DELEGATE":
+            try:
+                prior_beliefs = {
+                    "belief_agent_correct": user_belief_agent_correct,
+                    "belief_agent_ability": user_belief_agent_ability,
+                    "belief_honesty": user_belief_honesty,
+                }
+                posterior_response = query_user_posterior(
+                    cfg=cfg,
+                    reported_confidence=agent_confidence,
+                    agent_correct=bool(agent_correct),
+                    prior_beliefs=prior_beliefs,
+                    history=history,
+                )
+                # Updated beliefs (posterior)
+                posterior_user_belief_agent_ability = (
+                    posterior_response.belief_agent_ability
+                )
+                posterior_user_belief_honesty = posterior_response.belief_honesty
+            except Exception as exc:
+                logger.error(
+                    f"Error in posterior user query (trial {trial_idx}, round {round_idx}): {exc}"
+                )
+                print(
+                    f"Error in posterior user query (trial {trial_idx}, round {round_idx}): {exc}"
+                )
+        else:
+            # No delegated outcome observed; posterior equals prior beliefs
+            posterior_user_belief_agent_ability = user_belief_agent_ability
+            posterior_user_belief_honesty = user_belief_honesty
 
         round_result: RoundResult = {
             "round": round_idx,
@@ -262,10 +348,15 @@ def run_one_trial(
             "agent_solution": agent_solution,
             "agent_confidence": agent_confidence,
             "agent_correct": agent_correct,
+            "agent_reasoning": agent_reasoning,
             "confidence_diff": confidence_diff,
             "user_decision": user_decision,
             "user_reasoning": user_reasoning,
-            "user_belief_agent_correct": user_belief,
+            "user_belief_agent_correct": user_belief_agent_correct,
+            "user_belief_agent_ability": user_belief_agent_ability,
+            "user_belief_honesty": user_belief_honesty,
+            "posterior_user_belief_agent_ability": posterior_user_belief_agent_ability,
+            "posterior_user_belief_honesty": posterior_user_belief_honesty,
             "user_payoff": payoffs["user_payoff"],
             "agent_payoff": payoffs["agent_payoff"],
         }
@@ -318,7 +409,19 @@ def compute_trial_statistics(
         for record in round_results
         if record.get("user_belief_agent_correct") is not None
     ]
+    user_beliefs_agent_ability = [
+        record["user_belief_agent_ability"]
+        for record in round_results
+        if record.get("user_belief_agent_ability") is not None
+    ]
+    user_beliefs_honesty = [
+        record["user_belief_honesty"]
+        for record in round_results
+        if record.get("user_belief_honesty") is not None
+    ]
     mean_user_belief = compute_mean(user_beliefs)
+    mean_user_belief_agent_ability = compute_mean(user_beliefs_agent_ability)
+    mean_user_belief_honesty = compute_mean(user_beliefs_honesty)
     agent_accuracy = agent_stats.get("agent_accuracy", 0)
     belief_error = (
         abs(mean_user_belief - agent_accuracy) if mean_user_belief is not None else None
@@ -340,6 +443,22 @@ def compute_trial_statistics(
         "self_solve_count": self_solve_count,
         "delegation_rate": delegation_rate,
         "mean_user_belief_agent_correct": mean_user_belief,
+        "mean_user_belief_agent_ability": mean_user_belief_agent_ability,
+        "mean_user_belief_honesty": mean_user_belief_honesty,
+        "mean_posterior_user_belief_agent_ability": compute_mean(
+            [
+                r["posterior_user_belief_agent_ability"]
+                for r in round_results
+                if r.get("posterior_user_belief_agent_ability") is not None
+            ]
+        ),
+        "mean_posterior_user_belief_honesty": compute_mean(
+            [
+                r["posterior_user_belief_honesty"]
+                for r in round_results
+                if r.get("posterior_user_belief_honesty") is not None
+            ]
+        ),
         "user_belief_error": belief_error,
         "total_user_payoff": total_user_payoff,
         "total_agent_payoff": total_agent_payoff,
@@ -350,7 +469,7 @@ def compute_trial_statistics(
     return stats
 
 
-def run_trials(cfg: TwoPlayerConfig) -> Dict[str, Any]:
+def run_trials(cfg: TwoPlayerConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
     """Run multiple trials of the two-player experiment and save results."""
     random.seed(cfg.seed)
     logger.info(f"Starting two-player experiment with seed {cfg.seed}")
@@ -378,22 +497,27 @@ def run_trials(cfg: TwoPlayerConfig) -> Dict[str, Any]:
     print("\nInteraction Parameters:")
     print(f"  Reward (r): {cfg.reward}")
     print(f"  Delegation cost (c): {cfg.cost}")
+    print(f"  Effort (e): {cfg.effort}")
     print(f"  Discount factor (δ): {cfg.discount_factor}")
     print(f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}")
     print(f"  Confidence mode: {cfg.confidence_mode.value}")
     print(f"\nExperiment: {cfg.num_trials} trials × {cfg.num_rounds} rounds\n")
 
     all_trial_results: List[Dict[str, Any]] = []
-    progress = tqdm(
-        total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game"
-    )
+    _progress_local = None
+    if progress is None:
+        _progress_local = tqdm(
+            total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game"
+        )
+        progress = _progress_local
 
     for trial_idx in range(cfg.num_trials):
         logger.debug(f"Starting trial {trial_idx}")
         trial_result = run_one_trial(cfg, dataset, trial_idx, progress)
         all_trial_results.append(trial_result)
 
-    progress.close()
+    if _progress_local is not None:
+        _progress_local.close()
 
     valid_trials = [
         trial
@@ -453,7 +577,99 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
     confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
     delegation_rates = aggregate_trial_stats(valid_trials, "delegation_rate")
     user_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief_agent_correct")
+    user_beliefs_agent_ability = aggregate_trial_stats(
+        valid_trials, "mean_user_belief_agent_ability"
+    )
+    user_beliefs_honesty = aggregate_trial_stats(
+        valid_trials, "mean_user_belief_honesty"
+    )
+    posterior_user_beliefs_agent_ability = aggregate_trial_stats(
+        valid_trials, "mean_posterior_user_belief_agent_ability"
+    )
+    posterior_user_beliefs_honesty = aggregate_trial_stats(
+        valid_trials, "mean_posterior_user_belief_honesty"
+    )
     belief_errors = aggregate_trial_stats(valid_trials, "user_belief_error")
+
+    # Per-round aggregated statistics across trials
+    per_round_stats: Dict[int, Dict[str, Optional[float]]] = {}
+    max_rounds = max((len(t["round_results"]) for t in valid_trials), default=0)
+    for r in range(max_rounds):
+        rounds = [
+            t["round_results"][r] for t in valid_trials if len(t["round_results"]) > r
+        ]
+        if not rounds:
+            continue
+
+        def to_float_bool(v: Optional[bool]) -> Optional[float]:
+            if v is None:
+                return None
+            return 1.0 if bool(v) else 0.0
+
+        baseline_acc_vals = [
+            to_float_bool(rnd.get("baseline_correct"))
+            for rnd in rounds
+            if rnd.get("baseline_correct") is not None
+        ]
+        baseline_conf_vals = [
+            rnd.get("baseline_confidence")
+            for rnd in rounds
+            if rnd.get("baseline_confidence") is not None
+        ]
+        agent_acc_vals = [
+            to_float_bool(rnd.get("agent_correct"))
+            for rnd in rounds
+            if rnd.get("agent_correct") is not None
+        ]
+        agent_conf_vals = [
+            rnd.get("agent_confidence")
+            for rnd in rounds
+            if rnd.get("agent_confidence") is not None
+        ]
+        conf_diff_vals = [
+            rnd.get("confidence_diff")
+            for rnd in rounds
+            if rnd.get("confidence_diff") is not None
+        ]
+        delegation_vals = [
+            1.0 if rnd.get("user_decision") == "DELEGATE" else 0.0
+            for rnd in rounds
+            if rnd.get("user_decision") in {"DELEGATE", "SELF_SOLVE"}
+        ]
+        belief_vals = [
+            rnd.get("user_belief_agent_correct")
+            for rnd in rounds
+            if rnd.get("user_belief_agent_correct") is not None
+        ]
+        user_payoff_vals = [
+            rnd.get("user_payoff")
+            for rnd in rounds
+            if rnd.get("user_payoff") is not None
+        ]
+        agent_payoff_vals = [
+            rnd.get("agent_payoff")
+            for rnd in rounds
+            if rnd.get("agent_payoff") is not None
+        ]
+
+        # Count confidence change categories by round
+        inflated_count = sum(1 for v in conf_diff_vals if v is not None and v > 0)
+        deflated_count = sum(1 for v in conf_diff_vals if v is not None and v < 0)
+        unchanged_count = sum(1 for v in conf_diff_vals if v is not None and v == 0)
+        per_round_stats[r] = {
+            "baseline_accuracy": compute_mean(baseline_acc_vals),
+            "baseline_confidence": compute_mean(baseline_conf_vals),
+            "agent_accuracy": compute_mean(agent_acc_vals),
+            "agent_confidence": compute_mean(agent_conf_vals),
+            "confidence_diff": compute_mean(conf_diff_vals),
+            "delegation_rate": compute_mean(delegation_vals),
+            "user_belief_agent_correct": compute_mean(belief_vals),
+            "mean_user_payoff": compute_mean(user_payoff_vals),
+            "mean_agent_payoff": compute_mean(agent_payoff_vals),
+            "confidence_inflated_count": float(inflated_count),
+            "confidence_deflated_count": float(deflated_count),
+            "confidence_unchanged_count": float(unchanged_count),
+        }
 
     return {
         "num_trials": len(valid_trials),
@@ -474,6 +690,14 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
         ),
         "mean_delegation_rate": compute_mean(delegation_rates),
         "mean_user_belief_agent_correct": compute_mean(user_beliefs),
+        "mean_user_belief_agent_ability": compute_mean(user_beliefs_agent_ability),
+        "mean_user_belief_honesty": compute_mean(user_beliefs_honesty),
+        "mean_posterior_user_belief_agent_ability": compute_mean(
+            posterior_user_beliefs_agent_ability
+        ),
+        "mean_posterior_user_belief_honesty": compute_mean(
+            posterior_user_beliefs_honesty
+        ),
         "mean_user_belief_error": compute_mean(belief_errors),
         "total_user_payoff": sum_trial_stats(valid_trials, "total_user_payoff"),
         "total_agent_payoff": sum_trial_stats(valid_trials, "total_agent_payoff"),
@@ -483,6 +707,7 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
         "mean_agent_payoff_per_round": compute_mean(
             aggregate_trial_stats(valid_trials, "mean_agent_payoff")
         ),
+        "per_round_statistics": per_round_stats,
     }
 
 
@@ -602,6 +827,73 @@ def generate_summary_report(
             lines.append(
                 f"  Mean agent payoff per round: {overall_stats['mean_agent_payoff_per_round']:.4f}"
             )
+
+        # Per-round statistics section
+        per_round = overall_stats.get("per_round_statistics") or {}
+        if per_round:
+            lines.extend(["", "Per-Round Statistics:"])
+            for r in sorted(per_round.keys()):
+                rs = per_round[r]
+                lines.append(f"  Round {r}:")
+                if (
+                    rs.get("baseline_accuracy") is not None
+                    and rs.get("baseline_confidence") is not None
+                ):
+                    lines.append(
+                        f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}, confidence: {rs['baseline_confidence']:.4f}"
+                    )
+                elif rs.get("baseline_accuracy") is not None:
+                    lines.append(
+                        f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}"
+                    )
+                elif rs.get("baseline_confidence") is not None:
+                    lines.append(
+                        f"    Baseline - confidence: {rs['baseline_confidence']:.4f}"
+                    )
+
+                if (
+                    rs.get("agent_accuracy") is not None
+                    and rs.get("agent_confidence") is not None
+                ):
+                    lines.append(
+                        f"    Agent - accuracy: {rs['agent_accuracy']:.4f}, reported confidence: {rs['agent_confidence']:.4f}"
+                    )
+                elif rs.get("agent_accuracy") is not None:
+                    lines.append(f"    Agent - accuracy: {rs['agent_accuracy']:.4f}")
+                elif rs.get("agent_confidence") is not None:
+                    lines.append(
+                        f"    Agent - reported confidence: {rs['agent_confidence']:.4f}"
+                    )
+
+                if rs.get("confidence_diff") is not None:
+                    lines.append(
+                        f"    Confidence diff (strategic - baseline): {rs['confidence_diff']:.4f}"
+                    )
+                # Per-round confidence change counts
+                if rs.get("confidence_inflated_count") is not None:
+                    lines.append(
+                        f"    Confidence inflated rounds: {int(rs['confidence_inflated_count'])}"
+                    )
+                if rs.get("confidence_deflated_count") is not None:
+                    lines.append(
+                        f"    Confidence deflated rounds: {int(rs['confidence_deflated_count'])}"
+                    )
+                if rs.get("confidence_unchanged_count") is not None:
+                    lines.append(
+                        f"    Confidence unchanged rounds: {int(rs['confidence_unchanged_count'])}"
+                    )
+                if rs.get("delegation_rate") is not None:
+                    lines.append(f"    Delegation rate: {rs['delegation_rate']:.4f}")
+                if rs.get("user_belief_agent_correct") is not None:
+                    lines.append(
+                        f"    Mean user belief agent is correct: {rs['user_belief_agent_correct']:.4f}"
+                    )
+                if rs.get("mean_user_payoff") is not None:
+                    lines.append(f"    Mean user payoff: {rs['mean_user_payoff']:.4f}")
+                if rs.get("mean_agent_payoff") is not None:
+                    lines.append(
+                        f"    Mean agent payoff: {rs['mean_agent_payoff']:.4f}"
+                    )
     else:
         lines.append(f"  Error: {overall_stats['error']}")
 
@@ -609,12 +901,89 @@ def generate_summary_report(
     return "\n".join(lines)
 
 
-if __name__ == "__main__":
-    config = TwoPlayerConfig(
-        agent_model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        user_model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        num_trials=1,
-        num_rounds=5,
-    )
+def run_experiments(
+    configs: List[TwoPlayerConfig], csv_path: Path | str
+) -> pd.DataFrame:
+    """
+    Run experiments for multiple configurations and export a single CSV file
+    containing parameters and per-round results for easy analysis.
 
-    run_trials(config)
+    Each row of the CSV corresponds to one round of one trial of one config.
+    It includes:
+    - all keys from the "config" object (parameters)
+    - trial_idx, num_rounds_completed, timestamp
+    - all fields from the round result (task, confidence, decisions, payoffs, etc.)
+
+    Returns:
+        pandas.DataFrame containing all per-round rows merged with parameters.
+    """
+
+    # Prepare CSV writer
+    fieldnames: List[str] = []
+    rows_buffer: List[Dict[str, Any]] = []
+
+    # Create a tqdm progress bar across all configs and trials/rounds
+    total_steps = sum(c.num_trials * c.num_rounds for c in configs)
+    sweep_progress = tqdm(total=total_steps, desc="Config sweep progress")
+
+    for cfg in configs:
+        # Run the full experiment for this config, passing the shared progress bar
+        results = run_trials(cfg, progress=sweep_progress)
+
+        timestamp = results.get("timestamp")
+        config = results.get("config", {}) or {}
+        trials = results.get("trial_results", []) or []
+
+        for trial in trials:
+            trial_idx = trial.get("trial_idx")
+            num_rounds_completed = trial.get("num_rounds_completed")
+            round_results = trial.get("round_results", []) or []
+
+            for rr in round_results:
+                row: Dict[str, Any] = {**config}
+                row["timestamp"] = timestamp
+                row["trial_idx"] = trial_idx
+                row["num_rounds_completed"] = num_rounds_completed
+                # Include all round result fields verbatim
+                row.update(rr or {})
+                if "task" in row:
+                    del row["task"]
+                rows_buffer.append(row)
+
+                # Track fieldnames (union of all seen keys)
+                for k in row.keys():
+                    if k not in fieldnames:
+                        fieldnames.append(k)
+
+    # Close progress bar
+    sweep_progress.close()
+
+    # Create DataFrame and write CSV via pandas
+    df = pd.DataFrame(rows_buffer, columns=fieldnames)
+    csv_path_obj = Path(csv_path)
+    csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(csv_path_obj, index=False)
+
+    # Return DataFrame
+    return df
+
+
+if __name__ == "__main__":
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    output_filename = (
+        Path(__file__).parent.parent.parent
+        / "outputs"
+        / f"sweep_two_player_{timestamp}.csv"
+    )
+    deltas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    sweep_configs = [
+        TwoPlayerConfig(
+            # model_name="together_ai/openai/gpt-oss-20b",
+            num_trials=1,
+            num_rounds=2,
+            discount_factor=delta,
+        )
+        for delta in deltas
+    ]
+
+    run_experiments(sweep_configs, output_filename)

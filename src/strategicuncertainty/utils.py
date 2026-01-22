@@ -11,7 +11,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
-from .llm_interface import AgentResponse, ConfidenceMode, load_template, query_llm
+from .llm_interface import (
+    AgentBaselineResponse,
+    AgentGameResponse,
+    ConfidenceMode,
+    load_template,
+    query_llm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,13 @@ class RoundResult(TypedDict, total=False):
     user_decision: Optional[str]
     user_reasoning: Optional[str]
     user_belief_agent_correct: Optional[float]
+    # Additional user beliefs
+    user_belief_agent_ability: Optional[float]
+    user_belief_honesty: Optional[float]
+    # Posterior beliefs (after observing delegated outcome)
+    posterior_user_belief_agent_ability: Optional[float]
+    posterior_user_belief_honesty: Optional[float]
+    # Payoffs
     user_payoff: Optional[float]
     agent_payoff: Optional[float]
 
@@ -91,8 +104,15 @@ class TrialStatistics(TypedDict, total=False):
     delegation_count: int
     self_solve_count: int
     delegation_rate: float
-    mean_user_belief_agent_correct: float
-    user_belief_error: float
+    # User beliefs (prior to posterior update)
+    mean_user_belief_agent_correct: Optional[float]
+    mean_user_belief_agent_ability: Optional[float]
+    mean_user_belief_honesty: Optional[float]
+    # Posterior user beliefs (after observing delegated outcome)
+    mean_posterior_user_belief_agent_ability: Optional[float]
+    mean_posterior_user_belief_honesty: Optional[float]
+    # Calibration/error
+    user_belief_error: Optional[float]
     # Payoffs
     total_user_payoff: float
     total_agent_payoff: float
@@ -115,16 +135,17 @@ class BaseGameConfig:
     """
 
     # LLM configuration
+    user_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
     agent_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
     max_tokens: int = 512
     temperature: float = 0.0
 
     # Prompt templates
     baseline_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "baseline_prompt.j2"
+        default_factory=lambda: TEMPLATE_DIR / "baseline_agent_prompt.j2"
     )
     game_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "game_prompt.j2"
+        default_factory=lambda: TEMPLATE_DIR / "game_agent_prompt.j2"
     )
 
     # Dataset
@@ -132,8 +153,9 @@ class BaseGameConfig:
 
     # Game parameters
     reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
-    cost: float = 0.1  # Cost the user pays to delegate the task
+    cost: float = 0.2  # Cost the user pays to delegate the task
     discount_factor: float = 0.9  # δ: discount factor for future payoffs
+    effort: float = 0.5  # Effort cost the user pays to self-solve the task
 
     # Confidence reporting
     confidence_mode: ConfidenceMode = ConfidenceMode.CONTINUOUS
@@ -197,41 +219,35 @@ def evaluate_solution(response_solution: str, correct_solution: str) -> bool:
 
 
 def solve_task_without_game_context(
-    agent_model_name: str,
+    cfg: BaseGameConfig,
     task: str,
-    confidence_mode: ConfidenceMode,
-    template_path: Path,
-    max_tokens: int = 512,
-    temperature: float = 0.0,
-) -> AgentResponse:
+) -> AgentBaselineResponse:
     """Query the agent LLM on a task without strategic context."""
-    logger.debug(f"Solving baseline task with agent {agent_model_name}")
+    logger.debug(f"Solving baseline task with agent {cfg.agent_model_name}")
     prompt = load_template(
-        template_path,
+        cfg.baseline_template_path,
         task=task,
-        confidence_mode=confidence_mode.value,
+        confidence_mode=cfg.confidence_mode.value,
     )
     response, _ = query_llm(
-        agent_model_name, prompt, AgentResponse, max_tokens, temperature
+        cfg.agent_model_name,
+        prompt,
+        AgentBaselineResponse,
+        cfg.max_tokens,
+        cfg.temperature,
     )
     return response
 
 
 def solve_task_with_game_context(
-    agent_model_name: str,
+    cfg: BaseGameConfig,
     task: str,
-    confidence_mode: ConfidenceMode,
-    template_path: Path,
-    reward: float,
-    cost: float,
-    discount_factor: float,
-    threshold: float,
     history: Optional[List[HistoryEntry]] = None,
-    max_tokens: int = 512,
-    temperature: float = 0.0,
-) -> AgentResponse:
+) -> AgentGameResponse:
     """Query the agent LLM on a task with strategic context."""
-    logger.debug(f"Solving task with strategic context using agent {agent_model_name}")
+    logger.debug(
+        f"Solving task with strategic context using agent {cfg.agent_model_name}"
+    )
 
     if history:
         delegation_count = sum(
@@ -242,24 +258,28 @@ def solve_task_with_game_context(
         total_agent_payoff = sum(h.get("agent_payoff", 0) for h in history)
     else:
         delegation_count = 0
-        agent_accuracy = "N/A"
+        agent_accuracy = None
         total_agent_payoff = 0.0
 
     prompt = load_template(
-        template_path,
+        cfg.game_template_path,
         task=task,
-        reward=reward,
-        cost=cost,
-        discount_factor=discount_factor,
-        threshold=threshold,
+        reward=cfg.reward,
+        cost=cfg.cost,
+        effort=cfg.effort,
+        discount_factor=cfg.discount_factor,
+        num_rounds=cfg.num_rounds,
+        threshold=cfg.compute_threshold(),
         history=history,
+        round=len(history) + 1,
         agent_accuracy=agent_accuracy,
         delegation_count=delegation_count,
         total_agent_payoff=total_agent_payoff,
-        confidence_mode=confidence_mode.value,
+        confidence_mode=cfg.confidence_mode.value,
     )
+    # print(prompt)
     response, _ = query_llm(
-        agent_model_name, prompt, AgentResponse, max_tokens, temperature
+        cfg.agent_model_name, prompt, AgentGameResponse, cfg.max_tokens, cfg.temperature
     )
     return response
 
@@ -370,3 +390,49 @@ def sum_trial_stats(trial_results: List[Dict[str, Any]], stat_key: str) -> float
     return sum(
         t["statistics"].get(stat_key, 0) for t in trial_results if "statistics" in t
     )
+
+
+def load_two_player_results_to_df(results_path: Path | str):
+    """
+    Load a two_player results.json file and return a pandas DataFrame
+    where each row corresponds to one round of one trial, merged with config.
+
+    Columns include all keys from the top-level "config" object plus:
+    - trial_idx
+    - num_rounds_completed
+    - all fields from each round_results entry (e.g., round, sample_idx, task, etc.)
+
+    Args:
+        results_path: Path to the results.json file produced by two_player.py
+
+    Returns:
+        pandas.DataFrame with per-round rows and config merged.
+    """
+    import json
+
+    import pandas as pd
+
+    # Read results JSON
+    with open(results_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    config = data.get("config", {}) or {}
+    trials = data.get("trial_results", []) or []
+
+    rows = []
+    for trial in trials:
+        trial_idx = trial.get("trial_idx")
+        num_rounds_completed = trial.get("num_rounds_completed")
+        round_results = trial.get("round_results", []) or []
+
+        for rr in round_results:
+            # Merge config with trial-level identifiers and the per-round result
+            row = {**config}
+            row["trial_idx"] = trial_idx
+            row["num_rounds_completed"] = num_rounds_completed
+            # Include all round result fields verbatim
+            row.update(rr or {})
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    return df

@@ -38,7 +38,7 @@ class ConfidenceMode(str, Enum):
 # =============================================================================
 
 
-class AgentResponse(BaseModel):
+class AgentBaselineResponse(BaseModel):
     """Schema for the agent LLM's solution and confidence response."""
 
     solution: str = Field(description="The agent's proposed solution to the task")
@@ -47,13 +47,45 @@ class AgentResponse(BaseModel):
     )
 
 
-class UserResponse(BaseModel):
+class AgentGameResponse(BaseModel):
+    """Schema for the agent LLM's solution and confidence response."""
+
+    solution: str = Field(description="Agent's proposed solution to the task")
+    confidence: float = Field(description="Agent's confidence signal to the user")
+    reasoning: str = Field(description="Agent's reasoning behind the confidence signal")
+
+
+class UserDecisionResponse(BaseModel):
     """Schema for the user's delegation decision response."""
 
     reasoning: str = Field(description="Brief explanation of the decision")
     decision: str = Field(description="DELEGATE or SELF_SOLVE")
     belief_agent_correct: float = Field(
         description="User's belief about the agent's probability of being correct (0.0 to 1.0)"
+    )
+    belief_agent_ability: float = Field(
+        description="User's belief about the agent's general ability/success probability on similar tasks (0.0 to 1.0)"
+    )
+    belief_honesty: float = Field(
+        description="User's belief that the agent is honest/truthful when reporting confidence (0.0 to 1.0)"
+    )
+
+
+class UserPosteriorResponse(BaseModel):
+    """Schema for the user's posterior belief update after observing delegated outcome."""
+
+    reasoning: str = Field(
+        description="Brief explanation of how the observed outcome changed beliefs"
+    )
+    belief_agent_correct: Optional[float] = Field(
+        default=None,
+        description="Updated belief about the agent's probability of being correct (0.0 to 1.0). Optional if not updated.",
+    )
+    belief_agent_ability: float = Field(
+        description="Updated belief about the agent's general ability/success probability on similar tasks (0.0 to 1.0)"
+    )
+    belief_honesty: float = Field(
+        description="Updated belief that the agent is honest/truthful when reporting confidence (0.0 to 1.0)"
     )
 
 
@@ -112,7 +144,7 @@ def _make_llm_request(
             },
         )
     except Exception as e:
-        print(f"LLM REQUEST ERROR: {e}")
+        logger.error(f"LLM REQUEST ERROR: {e}")
         raise e
 
     try:
@@ -120,8 +152,13 @@ def _make_llm_request(
     except Exception as e:
         logger.warning(f"Failed to calculate cost: {e}")
         cost = 0.0
+    content = response.choices[0].message.content or ""
+    if not content:
+        # This triggers tenacity's retry with exponential backoff
+        logger.error("Empty response from LLM, retrying...")
+        raise ValueError("Empty response from LLM")
 
-    return response.choices[0].message.content or "", cost
+    return content, cost
 
 
 def query_llm(
@@ -150,17 +187,17 @@ def query_llm(
         )
 
         if not raw_response:
-            print("LLM RESPONSE ERROR: Empty response")
+            logger.error("LLM RESPONSE ERROR: Empty response")
             raise ValueError("Empty response from LLM")
 
         try:
             parsed_response = response_template.model_validate_json(raw_response)
             return parsed_response, cost
         except Exception as e:
-            print(f"LLM RESPONSE PARSING ERROR: {e}.")
-            print(f"Raw response: {raw_response}")
+            logger.error(f"LLM RESPONSE PARSING ERROR: {e}.")
+            logger.error(f"Raw response: {raw_response}")
             raise ValueError("Failed to parse LLM response")
 
     except Exception as e:
-        print(f"LLM QUERY FAILED: {e}")
+        logger.error(f"LLM QUERY FAILED: {e}")
         raise e
