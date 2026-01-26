@@ -45,6 +45,9 @@ class RoundResult(TypedDict, total=False):
     agent_correct: Optional[bool]
     # Comparison metrics
     confidence_diff: Optional[float]
+    # User priors
+    prior_agent_honesty: Optional[float]
+    prior_agent_ability: Optional[float]
     # User behaviour (two-player mode)
     user_decision: Optional[str]
     user_reasoning: Optional[str]
@@ -153,6 +156,9 @@ class BaseGameConfig:
     cost: float = 0.2  # Cost the user pays to delegate the task
     discount_factor: float = 0.9  # δ: discount factor for future payoffs
     effort: float = 0.5  # Effort cost the user pays to self-solve the task
+    priors: bool = False  # Whether to supply agent with prior beliefs
+    h_0: float = 0.5  # Honesty prior belief
+    mu_0: float = 0.5  # Ability prior belief
 
     # Confidence reporting
     confidence_mode: ConfidenceMode = ConfidenceMode.CONTINUOUS

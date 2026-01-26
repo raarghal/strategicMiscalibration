@@ -128,6 +128,9 @@ def solve_task_with_game_context(
         delegation_count=delegation_count,
         total_agent_payoff=total_agent_payoff,
         confidence_mode=cfg.confidence_mode.value,
+        priors=cfg.priors,
+        prior_honesty=cfg.h_0,
+        prior_capability=cfg.mu_0,
     )
     # print(prompt)
     response, _ = query_llm(
@@ -140,6 +143,8 @@ def query_user_delegation(
     cfg: BaseGameConfig,
     reported_confidence: float,
     history: List[HistoryEntry],
+    h_t: Optional[float] = None,
+    mu_t: Optional[float] = None,
 ) -> UserDecisionResponse:
     """Query the user LLM with the reported confidence and interaction history."""
     logger.debug(f"Asking user LLM with reported confidence {reported_confidence}")
@@ -185,6 +190,9 @@ def query_user_delegation(
         high_confidence_delegated_accuracy=high_confidence_delegated_accuracy,
         total_payoff=total_payoff,
         confidence_mode=cfg.confidence_mode.value,
+        priors=cfg.priors,
+        prior_ability=mu_t,
+        prior_honesty=h_t,
     )
 
     response, _ = query_llm(

@@ -15,8 +15,8 @@ PAYOFF STRUCTURE:
 BELIEFS:
 - You should maintain beliefs about the agent's correctness, ability, and honesty:
 1) Correctness: The probability the agent would be correct ON THE CURRENT TASK if you DELEGATE.
-2) Ability: The probability the agent would be correct on a given task.
-3) Honesty: The probability the agent is truthfully reporting its confidence (i.e., not inflating or deflating strategically).
+2) Ability: The probability the agent would be correct on a given task. Prior belief of the agent's ability is {{prior_ability}}
+3) Honesty: The probability the agent is truthfully reporting its confidence (i.e., not inflating or deflating strategically). Prior belief that the agent is honest is {{prior_honesty}}.
 
 {% if confidence_mode == "binary" %}
 CONFIDENCE SCALE:

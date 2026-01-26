@@ -82,6 +82,9 @@ def run_one_trial(
     round_results: List[RoundResult] = []
     dataset_size = len(dataset)
 
+    h_t = cfg.h_0
+    mu_t = cfg.mu_0
+
     for round_idx in range(cfg.num_rounds):
         sample_idx = random.randint(0, dataset_size - 1)
         sample = dataset[sample_idx]
@@ -146,7 +149,9 @@ def run_one_trial(
             continue
 
         try:
-            user_response = query_user_delegation(cfg, agent_confidence, history)
+            user_response = query_user_delegation(
+                cfg, agent_confidence, history, h_t, mu_t
+            )
             user_decision = user_response.decision.upper()
             user_reasoning = user_response.reasoning
             user_belief_agent_correct = user_response.belief_agent_correct
@@ -229,6 +234,8 @@ def run_one_trial(
             "agent_correct": agent_correct,
             "agent_reasoning": agent_reasoning,
             "confidence_diff": confidence_diff,
+            "prior_agent_honesty": h_t,
+            "prior_agent_ability": mu_t,
             "user_decision": user_decision,
             "user_reasoning": user_reasoning,
             "user_belief_agent_correct": user_belief_agent_correct,
@@ -239,6 +246,8 @@ def run_one_trial(
             "user_payoff": payoffs["user_payoff"],
             "agent_payoff": payoffs["agent_payoff"],
         }
+        h_t = posterior_user_belief_honesty
+        mu_t = posterior_user_belief_agent_ability
         round_results.append(round_result)
 
         history_entry: HistoryEntry = {
@@ -357,6 +366,7 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
     output_path = (
         Path(__file__).parent.parent.parent
         / Path(cfg.output_dir)
+        / "trials"
         / f"two_player_{timestamp}"
     )
     output_path.mkdir(parents=True, exist_ok=True)
@@ -431,11 +441,16 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
         "trial_results": all_trial_results,
     }
 
-    with open(output_path / "results.json", "w", encoding="utf-8") as handle:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    with open(
+        output_path / f"results_{timestamp}.json", "w", encoding="utf-8"
+    ) as handle:
         json.dump(results, handle, indent=2, default=str)
 
     summary = generate_summary_report(cfg, timestamp, overall_stats)
-    with open(output_path / "summary.txt", "w", encoding="utf-8") as handle:
+    with open(
+        output_path / f"summary_{timestamp}.txt", "w", encoding="utf-8"
+    ) as handle:
         handle.write(summary)
 
     print(summary)
@@ -849,13 +864,14 @@ def run_experiments(
     # Ensure output directory exists
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
 
     # Write constant config to json
-    with open(output_dir / "config.json", "w") as f:
+    with open(output_dir / f"config_{timestamp}.json", "w") as f:
         json.dump(constant_config, f, indent=4, default=str)
 
     # Write trimmed DataFrame to CSV
-    df_trimmed.to_csv(output_dir / "results.csv", index=False)
+    df_trimmed.to_csv(output_dir / f"results_{timestamp}.csv", index=False)
 
     # Return the full DataFrame (or df_trimmed based on preference,
     # but the request implies returning the dataframe after processing)
@@ -867,17 +883,27 @@ if __name__ == "__main__":
     output_filename = (
         Path(__file__).parent.parent.parent
         / "outputs"
+        / "experiments"
         / f"sweep_two_player_{timestamp}"
     )
     deltas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    h_s = [0.1, 0.3, 0.5, 0.7, 0.9]
+    mu_s = [0.1, 0.3, 0.5, 0.7, 0.9]
+
     sweep_configs = [
         BaseGameConfig(
             # model_name="together_ai/openai/gpt-oss-20b",
-            num_trials=5,
+            num_trials=1,
             num_rounds=2,
             discount_factor=delta,
+            priors=True,
+            h_0=h,
+            mu_0=mu,
+            seed=time.time(),
         )
         for delta in deltas
+        for h in h_s
+        for mu in mu_s
     ]
-
+    # print(len(sweep_configs))
     run_experiments(sweep_configs, output_filename)
