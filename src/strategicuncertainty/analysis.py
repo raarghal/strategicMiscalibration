@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from .pivot_analysis import build_summary_pivot, plot_metric_by_round
-
 # Set up plotting style
 sns.set_style("whitegrid")
 plt.rcParams["figure.figsize"] = (12, 6)
@@ -146,23 +144,4 @@ plt.tight_layout()
 #     format="pdf",
 #     dpi=1200,
 # )
-plt.show()
-
-try:
-    summary_pivot = build_summary_pivot(plotting_data)
-except ValueError as exc:
-    print(f"Summary pivot skipped: {exc}")
-else:
-    try:
-        plot_metric_by_round(
-            summary_pivot=summary_pivot,
-            metric_name="Avg. Confidence Diff",
-            include_overall=True,
-        )
-        plt.tight_layout()
-        plt.show()
-    except ValueError as exc:
-        print(f"Average confidence diff plot skipped: {exc}")
-
-
 plt.show()
