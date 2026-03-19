@@ -168,3 +168,9 @@ class BaseGameConfig:
     num_rounds: int = 10
     output_dir: str = "outputs"
     seed: int = 42
+
+    def compute_threshold(self) -> float:
+        """
+        Compute the delegation threshold for the user.
+        """
+        return 1 - (self.effort - self.cost) / self.reward
