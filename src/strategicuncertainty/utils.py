@@ -303,12 +303,12 @@ def compute_agent_stats(
 
     high_confidence_rounds = [
         r
-        for r in round_results
+        for r in agent_rounds
         if r.get("agent_confidence") is not None and r["agent_confidence"] >= threshold
     ]
     low_confidence_rounds = [
         r
-        for r in round_results
+        for r in agent_rounds
         if r.get("agent_confidence") is not None and r["agent_confidence"] < threshold
     ]
 
