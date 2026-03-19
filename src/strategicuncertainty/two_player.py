@@ -905,7 +905,7 @@ if __name__ == "__main__":
             priors=True,
             h_0=h,
             mu_0=mu,
-            seed=time.time(),
+            seed=int(time.time()),
         )
         for delta in deltas
         for h in h_s

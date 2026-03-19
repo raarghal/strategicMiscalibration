@@ -113,6 +113,9 @@ def solve_task_with_game_context(
         agent_accuracy = None
         total_agent_payoff = 0.0
 
+    # Use a safe default so that history can be None (e.g., in single-player mode)
+    history_list = history or []
+
     prompt = load_template(
         cfg.game_template_path,
         task=task,
@@ -122,8 +125,8 @@ def solve_task_with_game_context(
         discount_factor=cfg.discount_factor,
         num_rounds=cfg.num_rounds,
         threshold=cfg.compute_threshold(),
-        history=history,
-        round=len(history) + 1,
+        history=history_list,
+        round=len(history_list) + 1,
         agent_accuracy=agent_accuracy,
         delegation_count=delegation_count,
         total_agent_payoff=total_agent_payoff,

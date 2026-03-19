@@ -86,14 +86,7 @@ def run_one_trial(
 
         # Get baseline response (no game context)
         try:
-            baseline_response = solve_task_without_game_context(
-                model_name=cfg.model_name,
-                task=task,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.baseline_template_path,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-            )
+            baseline_response = solve_task_without_game_context(cfg=cfg, task=task)
             baseline_solution = baseline_response.solution
             baseline_confidence = baseline_response.confidence
             baseline_correct = evaluate_solution(baseline_solution, correct_solution)
@@ -111,18 +104,9 @@ def run_one_trial(
         # Get game context response (no history in single-player mode)
         try:
             agent_response = solve_task_with_game_context(
-                model_name=cfg.model_name,
+                cfg=cfg,
                 task=task,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.game_template_path,
-                reward=cfg.reward,
-                cost=cfg.cost,
-                discount_factor=cfg.discount_factor,
-                threshold=cfg.compute_threshold(),
                 history=None,
-                effort=cfg.effort,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
             )
             agent_solution = agent_response.solution
             agent_confidence = agent_response.confidence
