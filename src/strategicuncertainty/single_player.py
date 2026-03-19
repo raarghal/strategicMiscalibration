@@ -36,10 +36,6 @@ from .utils import (
     sum_trial_stats,
 )
 
-logging.basicConfig(
-    level=logging.ERROR,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -90,12 +86,11 @@ def run_one_trial(
             baseline_solution = baseline_response.solution
             baseline_confidence = baseline_response.confidence
             baseline_correct = evaluate_solution(baseline_solution, correct_solution)
-        except Exception as e:
-            logger.error(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            print(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
+        except Exception:
+            logger.exception(
+                "Error in baseline query (trial=%s, round=%s)",
+                trial_idx,
+                round_idx,
             )
             baseline_solution = None
             baseline_confidence = None
@@ -111,11 +106,12 @@ def run_one_trial(
             agent_solution = agent_response.solution
             agent_confidence = agent_response.confidence
             agent_correct = evaluate_solution(agent_solution, correct_solution)
-        except Exception as e:
-            logger.error(
-                f"Error in game query (trial {trial_idx}, round {round_idx}): {e}"
+        except Exception:
+            logger.exception(
+                "Error in game query (trial=%s, round=%s)",
+                trial_idx,
+                round_idx,
             )
-            print(f"Error in game query (trial {trial_idx}, round {round_idx}): {e}")
             agent_solution = None
             agent_confidence = None
             agent_correct = None
@@ -146,7 +142,6 @@ def run_one_trial(
         round_results.append(round_result)
 
         progress.update(1)
-        progress.refresh()
 
     # Compute trial statistics
     trial_stats = compute_trial_statistics(round_results, cfg)
@@ -211,7 +206,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     """
     # Set random seed for reproducibility
     random.seed(cfg.seed)
-    logger.info(f"Starting single-player experiment with seed {cfg.seed}")
+    logger.info("Starting single-player experiment with seed %s", cfg.seed)
 
     # Create output directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -221,14 +216,12 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
         / f"single_player_{timestamp}"
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Output directory: {output_path}")
+    logger.info("Output directory: %s", output_path)
 
     # Load dataset
-    print(f"Loading dataset: {cfg.dataset_name}")
-    logger.info(f"Loading dataset: {cfg.dataset_name}")
+    logger.info("Loading dataset: %s", cfg.dataset_name)
     dataset = datasets.load_dataset(cfg.dataset_name, split="test")
-    print(f"Dataset loaded with {len(dataset)} samples")
-    logger.info(f"Dataset loaded with {len(dataset)} samples")
+    logger.info("Dataset loaded with %s samples", len(dataset))
 
     # Print game parameters
     print("\nInteraction Parameters:")
@@ -245,7 +238,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     progress = tqdm(total=cfg.num_trials * cfg.num_rounds, desc="Running trials")
 
     for trial_idx in range(cfg.num_trials):
-        logger.debug(f"Starting trial {trial_idx}")
+        logger.debug("Starting trial %s", trial_idx)
         trial_result = run_one_trial(cfg, dataset, trial_idx, progress)
         all_trial_results.append(trial_result)
         # time.sleep(2)
@@ -256,7 +249,9 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     valid_trials = [
         t for t in all_trial_results if "error" not in t.get("statistics", {})
     ]
-    logger.info(f"Completed {len(valid_trials)} valid trials out of {cfg.num_trials}")
+    logger.info(
+        "Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials
+    )
 
     if valid_trials:
         # Aggregate statistics across trials
@@ -325,7 +320,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
 
     print(summary)
     print(f"\nResults saved to: {output_path}")
-    logger.info(f"Results saved to: {output_path}")
+    logger.info("Results saved to: %s", output_path)
 
     return results
 
@@ -408,6 +403,11 @@ def generate_summary_report(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
     # Default configuration for testing
     config = BaseGameConfig(
         num_trials=5,

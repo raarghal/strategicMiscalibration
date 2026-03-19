@@ -44,10 +44,6 @@ from .utils import (
     sum_trial_stats,
 )
 
-logging.basicConfig(
-    level=logging.ERROR,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -112,12 +108,11 @@ def run_one_trial(
             baseline_solution = baseline_response.solution
             baseline_confidence = baseline_response.confidence
             baseline_correct = evaluate_solution(baseline_solution, correct_solution)
-        except Exception as exc:
-            logger.error(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {exc}"
-            )
-            print(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {exc}"
+        except Exception:
+            logger.exception(
+                "Error in baseline query (trial=%s, round=%s)",
+                trial_idx,
+                round_idx,
             )
             baseline_solution = None
             baseline_confidence = None
@@ -133,11 +128,12 @@ def run_one_trial(
             agent_confidence = agent_response.confidence
             agent_reasoning = agent_response.reasoning
             agent_correct = evaluate_solution(agent_solution, correct_solution)
-        except Exception as exc:
-            logger.error(
-                f"Error in agent query (trial {trial_idx}, round {round_idx}): {exc}"
+        except Exception:
+            logger.exception(
+                "Error in agent query (trial=%s, round=%s)",
+                trial_idx,
+                round_idx,
             )
-            print(f"Error in agent query (trial {trial_idx}, round {round_idx}): {exc}")
             agent_solution = None
             agent_confidence = None
             agent_reasoning = None
@@ -162,11 +158,12 @@ def run_one_trial(
                 user_decision = (
                     "DELEGATE" if "DELEGATE" in user_decision else "SELF_SOLVE"
                 )
-        except Exception as exc:
-            logger.error(
-                f"Error in user query (trial {trial_idx}, round {round_idx}): {exc}"
+        except Exception:
+            logger.exception(
+                "Error in user query (trial=%s, round=%s)",
+                trial_idx,
+                round_idx,
             )
-            print(f"Error in user query (trial {trial_idx}, round {round_idx}): {exc}")
             user_decision = None
             user_reasoning = None
             user_belief_agent_correct = None
@@ -208,12 +205,11 @@ def run_one_trial(
                     posterior_response.belief_agent_ability
                 )
                 posterior_user_belief_honesty = posterior_response.belief_honesty
-            except Exception as exc:
-                logger.error(
-                    f"Error in posterior user query (trial {trial_idx}, round {round_idx}): {exc}"
-                )
-                print(
-                    f"Error in posterior user query (trial {trial_idx}, round {round_idx}): {exc}"
+            except Exception:
+                logger.exception(
+                    "Error in posterior user query (trial=%s, round=%s)",
+                    trial_idx,
+                    round_idx,
                 )
         else:
             # No delegated outcome observed; posterior equals prior beliefs
@@ -360,7 +356,7 @@ def compute_trial_statistics(
 def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
     """Run multiple trials of the two-player experiment and save results."""
     random.seed(cfg.seed)
-    logger.info(f"Starting two-player experiment with seed {cfg.seed}")
+    logger.info("Starting two-player experiment with seed %s", cfg.seed)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_path = (
@@ -370,13 +366,11 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
         / f"two_player_{timestamp}"
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Output directory: {output_path}")
+    logger.info("Output directory: %s", output_path)
 
-    print(f"Loading dataset: {cfg.dataset_name}")
-    logger.info(f"Loading dataset: {cfg.dataset_name}")
+    logger.info("Loading dataset: %s", cfg.dataset_name)
     dataset = datasets.load_dataset(cfg.dataset_name, split="test")
-    print(f"Dataset loaded with {len(dataset)} samples")
-    logger.info(f"Dataset loaded with {len(dataset)} samples")
+    logger.info("Dataset loaded with %s samples", len(dataset))
 
     print("\n" + "=" * 70)
     print("Two-Player Strategic Delegation Game")
@@ -401,7 +395,7 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
         progress = _progress_local
 
     for trial_idx in range(cfg.num_trials):
-        logger.debug(f"Starting trial {trial_idx}")
+        logger.debug("Starting trial %s", trial_idx)
         trial_result = run_one_trial(cfg, dataset, trial_idx, progress)
         all_trial_results.append(trial_result)
 
@@ -413,7 +407,9 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
         for trial in all_trial_results
         if "error" not in trial.get("statistics", {})
     ]
-    logger.info(f"Completed {len(valid_trials)} valid trials out of {cfg.num_trials}")
+    logger.info(
+        "Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials
+    )
 
     if valid_trials:
         overall_stats = compute_overall_statistics(valid_trials)
@@ -455,7 +451,7 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
 
     print(summary)
     print(f"\nResults saved to: {output_path}")
-    logger.info(f"Results saved to: {output_path}")
+    logger.info("Results saved to: %s", output_path)
 
     return results
 
@@ -879,6 +875,11 @@ def run_experiments(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_filename = (
         Path(__file__).parent.parent.parent
