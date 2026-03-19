@@ -153,7 +153,7 @@ class BaseGameConfig:
 
     # Game parameters
     reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
-    cost: float = 0.2  # Cost the user pays to delegate the task
+    cost: float = 0.1  # Cost the user pays to delegate the task
     discount_factor: float = 0.9  # δ: discount factor for future payoffs
     effort: float = 0.5  # Effort cost the user pays to self-solve the task
     priors: bool = False  # Whether to supply agent with prior beliefs

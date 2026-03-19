@@ -5,19 +5,28 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from .pivot_analysis import build_summary_pivot, plot_metric_by_round
+
 # Set up plotting style
 sns.set_style("whitegrid")
 plt.rcParams["figure.figsize"] = (12, 6)
 
 # Load a specific CSV file
 repo_path = Path(__file__).parent.parent.parent
-datafile = (
-    repo_path / "outputs/experiments/sweep_two_player_20260122_230336/results.csv"
+output_dir = repo_path / "outputs/experiments/sweep_two_player_20260122_133334_figure"
+csv_candidates = sorted(
+    output_dir.rglob("results*.csv"),
+    key=lambda candidate: candidate.stat().st_mtime,
+    reverse=True,
 )
-output_dir = datafile.parent
-df = pd.read_csv(datafile)
+if csv_candidates:
+    datafile = csv_candidates[0]
+else:
+    raise FileNotFoundError(f"No results CSV found under {output_dir}")
 
-df["Delegated"] = df["agent_payoff"] * 5
+df = pd.read_csv(datafile)
+# df["round"] = df["round"] + 1
+df["Delegated"] = df["agent_payoff"] * 10
 df = df.round(4)
 
 # Filter outliers from confidence_diff using IQR
@@ -36,7 +45,6 @@ df_outliers = df[
 ].copy()
 
 timestamp = time.strftime("%Y%m%d_%H%M%S")
-# print(df_outliers["agent_confidence"])
 
 df_correct = df[(df["agent_confidence"] > 0) & (df["baseline_confidence"] > 0)]
 
@@ -44,18 +52,19 @@ df_correct_filtered = df_filtered[
     (df_filtered["agent_confidence"] > 0) & (df_filtered["baseline_confidence"] > 0)
 ].copy()
 
+plotting_data = df_correct
 
 sns.barplot(
-    data=df_correct,
+    data=plotting_data[plotting_data["round"] == 0],
     x="discount_factor",
     y="confidence_diff",
-    hue="round",
+    # hue="round",
     capsize=0.1,
-    errorbar="se",
+    errorbar=("sd", 0.25),
 )
 plt.xlabel("Discount Factor", fontsize=12)
 plt.ylabel("Confidence Difference", fontsize=12)
-plt.title("Confidence Difference vs Discount Factor by Round", fontsize=14)
+# plt.title("Confidence Difference vs Discount Factor by Round", fontsize=14)
 plt.tight_layout()
 
 plt.savefig(
@@ -63,9 +72,10 @@ plt.savefig(
     format="pdf",
     dpi=1200,
 )
+# plt.show()
 
-dfrnd1 = df_correct[df_correct["round"] == 0]
-dfrnd2 = df_correct[df_correct["round"] == 1]
+dfrnd1 = plotting_data[plotting_data["round"] == 0]
+dfrnd2 = plotting_data[plotting_data["round"] == 1]
 
 heatmap_data_rnd1 = dfrnd1.copy()
 heatmap_data_rnd2 = dfrnd2.copy()
@@ -131,10 +141,28 @@ ax[1].set_title("Round 2", fontsize=14)
 fig.suptitle("Delegation Rate v. Reputation", fontsize=16)
 plt.tight_layout()
 
-plt.savefig(
-    output_dir / f"Cdelegation_rate_vs_priors_by_round_{timestamp}.pdf",
-    format="pdf",
-    dpi=1200,
-)
+# plt.savefig(
+#     output_dir / f"Cdelegation_rate_vs_priors_by_round_{timestamp}.pdf",
+#     format="pdf",
+#     dpi=1200,
+# )
+plt.show()
 
-fig, ax = plt.subplots(1, 1, figsize=(13, 6))
+try:
+    summary_pivot = build_summary_pivot(plotting_data)
+except ValueError as exc:
+    print(f"Summary pivot skipped: {exc}")
+else:
+    try:
+        plot_metric_by_round(
+            summary_pivot=summary_pivot,
+            metric_name="Avg. Confidence Diff",
+            include_overall=True,
+        )
+        plt.tight_layout()
+        plt.show()
+    except ValueError as exc:
+        print(f"Average confidence diff plot skipped: {exc}")
+
+
+plt.show()
