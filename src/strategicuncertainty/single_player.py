@@ -19,20 +19,18 @@ from typing import Any, Dict, List
 import datasets
 from tqdm import tqdm
 
+from .datatypes import BaseGameConfig, RoundResult, TaskData, TrialStatistics
 from .utils import (
-    BaseGameConfig,
-    RoundResult,
-    TaskData,
-    TrialStatistics,
     aggregate_trial_stats,
+    build_round_result,
     compute_agent_stats,
     compute_baseline_stats,
     compute_confidence_comparison_stats,
+    compute_confidence_diff,
     compute_mean,
-    evaluate_solution,
     extract_task_from_dataset,
-    solve_task_with_game_context,
-    solve_task_without_game_context,
+    query_and_sanitize_agent_game_response,
+    query_and_sanitize_baseline_response,
     sum_trial_stats,
 )
 
@@ -80,65 +78,36 @@ def run_one_trial(
         correct_solution = task_data["correct_solution"]
         difficulty = task_data["difficulty"]
 
-        # Get baseline response (no game context)
-        try:
-            baseline_response = solve_task_without_game_context(cfg=cfg, task=task)
-            baseline_solution = baseline_response.solution
-            baseline_confidence = baseline_response.confidence
-            baseline_correct = evaluate_solution(baseline_solution, correct_solution)
-        except Exception:
-            logger.exception(
-                "Error in baseline query (trial=%s, round=%s)",
-                trial_idx,
-                round_idx,
-            )
-            baseline_solution = None
-            baseline_confidence = None
-            baseline_correct = None
+        baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
+        agent = query_and_sanitize_agent_game_response(
+            cfg, task, correct_solution, history=None
+        )
 
-        # Get game context response (no history in single-player mode)
-        try:
-            agent_response = solve_task_with_game_context(
-                cfg=cfg,
-                task=task,
-                history=None,
-            )
-            agent_solution = agent_response.solution
-            agent_confidence = agent_response.confidence
-            agent_correct = evaluate_solution(agent_solution, correct_solution)
-        except Exception:
-            logger.exception(
-                "Error in game query (trial=%s, round=%s)",
-                trial_idx,
-                round_idx,
-            )
-            agent_solution = None
-            agent_confidence = None
-            agent_correct = None
+        baseline_solution = baseline["solution"]
+        baseline_confidence = baseline["confidence"] if baseline["is_valid"] else None
+        baseline_correct = baseline["correct"] if baseline["is_valid"] else None
+        agent_solution = agent["solution"]
+        agent_confidence = agent["confidence"] if agent["is_valid"] else None
+        agent_correct = agent["correct"] if agent["is_valid"] else None
 
         # Calculate confidence difference (key metric for strategic behavior)
-        confidence_diff = None
-        if baseline_confidence is not None and agent_confidence is not None:
-            confidence_diff = agent_confidence - baseline_confidence
+        confidence_diff = compute_confidence_diff(baseline_confidence, agent_confidence)
 
         # Record the results
-        round_result: RoundResult = {
-            "round": round_idx,
-            "sample_idx": sample_idx,
-            "task": task,
-            "correct_solution": correct_solution,
-            "difficulty": difficulty,
-            # Baseline results
-            "baseline_solution": baseline_solution,
-            "baseline_confidence": baseline_confidence,
-            "baseline_correct": baseline_correct,
-            # Agent results
-            "agent_solution": agent_solution,
-            "agent_confidence": agent_confidence,
-            "agent_correct": agent_correct,
-            # Comparison metrics
-            "confidence_diff": confidence_diff,
-        }
+        round_result = build_round_result(
+            round_idx=round_idx,
+            sample_idx=sample_idx,
+            task=task,
+            difficulty=difficulty,
+            correct_solution=correct_solution,
+            baseline_solution=baseline_solution,
+            baseline_confidence=baseline_confidence,
+            baseline_correct=baseline_correct,
+            agent_solution=agent_solution,
+            agent_confidence=agent_confidence,
+            agent_correct=agent_correct,
+            confidence_diff=confidence_diff,
+        )
         round_results.append(round_result)
 
         progress.update(1)
@@ -292,7 +261,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     results = {
         "timestamp": timestamp,
         "config": {
-            "model_name": cfg.model_name,
+            "model_name": cfg.agent_model_name,
             "dataset_name": cfg.dataset_name,
             "num_trials": cfg.num_trials,
             "num_rounds": cfg.num_rounds,
@@ -344,7 +313,7 @@ def generate_summary_report(
         "Single-Player Strategic Delegation Experiment Results",
         "=" * 70,
         f"Timestamp: {timestamp}",
-        f"Agent model: {cfg.model_name}",
+        f"Agent model: {cfg.agent_model_name}",
         f"Dataset: {cfg.dataset_name}",
         f"Trials: {cfg.num_trials}, Rounds per trial: {cfg.num_rounds}",
         "-" * 70,

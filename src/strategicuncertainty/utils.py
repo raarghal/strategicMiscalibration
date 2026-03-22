@@ -7,6 +7,7 @@ This module contains shared functionality used by both single_player.py and two_
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,8 +43,14 @@ def extract_task_from_dataset(sample: Dict[str, Any]) -> TaskData:
     correct_solution = ""
     if solution:
         solution_stripped = solution.strip()
-        if solution_stripped.startswith("(") and len(solution_stripped) >= 2:
+        if (
+            solution_stripped.startswith("(")
+            and len(solution_stripped) >= 2
+            and solution_stripped[1].isalpha()
+        ):
             correct_solution = solution_stripped[1]
+        elif solution_stripped and solution_stripped[0].isalpha():
+            correct_solution = solution_stripped[0]
         else:
             correct_solution = solution_stripped
 
@@ -52,8 +59,8 @@ def extract_task_from_dataset(sample: Dict[str, Any]) -> TaskData:
 
 def evaluate_solution(response_solution: str, correct_solution: str) -> bool:
     """Evaluate whether the agent's solution matches the correct solution."""
-    response_normalized = response_solution.strip().upper()
-    correct_normalized = correct_solution.strip().upper()
+    response_normalized = str(response_solution).strip().upper()
+    correct_normalized = str(correct_solution).strip().upper()
 
     response_letter = ""
     if response_normalized:
@@ -62,7 +69,325 @@ def evaluate_solution(response_solution: str, correct_solution: str) -> bool:
         elif response_normalized[0].isalpha():
             response_letter = response_normalized[0]
 
-    return response_letter == correct_normalized
+    correct_letter = ""
+    if correct_normalized:
+        if correct_normalized[0] == "(" and len(correct_normalized) >= 2:
+            correct_letter = correct_normalized[1]
+        elif correct_normalized[0].isalpha():
+            correct_letter = correct_normalized[0]
+
+    return bool(
+        response_letter and correct_letter and response_letter == correct_letter
+    )
+
+
+# =============================================================================
+# LLM Response Sanitization Helpers
+# =============================================================================
+
+
+def normalize_text(value: Any) -> Optional[str]:
+    """Normalize arbitrary text-like values into a stripped non-empty string."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_probability(value: Any) -> Optional[float]:
+    """Normalize a probability-like value to float in [0, 1], else None."""
+    try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if math.isnan(p) or math.isinf(p):
+        return None
+    if p < 0.0 or p > 1.0:
+        return None
+    return p
+
+
+def normalize_finite_float(value: Any) -> Optional[float]:
+    """Normalize a numeric value to finite float, else None."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(v) or math.isinf(v):
+        return None
+    return v
+
+
+def normalize_user_decision(value: Any) -> Optional[str]:
+    """Normalize user decision text to DELEGATE/SELF_SOLVE, else None."""
+    text = normalize_text(value)
+    if text is None:
+        return None
+
+    normalized = text.upper()
+    if normalized in {"DELEGATE", "SELF_SOLVE"}:
+        return normalized
+    if "DELEGATE" in normalized:
+        return "DELEGATE"
+    if "SELF" in normalized or "SOLVE" in normalized:
+        return "SELF_SOLVE"
+    return None
+
+
+def compute_confidence_diff(
+    baseline_confidence: Optional[float], agent_confidence: Optional[float]
+) -> Optional[float]:
+    """Compute confidence difference only when both values are available."""
+    if baseline_confidence is None or agent_confidence is None:
+        return None
+    return agent_confidence - baseline_confidence
+
+
+def build_round_result(
+    *,
+    round_idx: int,
+    sample_idx: int,
+    task: str,
+    difficulty: Optional[str],
+    correct_solution: str,
+    baseline_solution: Optional[str],
+    baseline_confidence: Optional[float],
+    baseline_correct: Optional[bool],
+    agent_solution: Optional[str],
+    agent_confidence: Optional[float],
+    agent_correct: Optional[bool],
+    confidence_diff: Optional[float],
+    agent_reasoning: Optional[str] = None,
+    prior_agent_honesty: Optional[float] = None,
+    prior_agent_ability: Optional[float] = None,
+    user_decision: Optional[str] = None,
+    user_reasoning: Optional[str] = None,
+    user_belief_agent_correct: Optional[float] = None,
+    user_belief_agent_ability: Optional[float] = None,
+    user_belief_honesty: Optional[float] = None,
+    posterior_user_belief_agent_ability: Optional[float] = None,
+    posterior_user_belief_honesty: Optional[float] = None,
+    user_payoff: Optional[float] = None,
+    agent_payoff: Optional[float] = None,
+) -> RoundResult:
+    """Build a normalized round result record for single- and two-player modes."""
+    return {
+        "round": round_idx,
+        "sample_idx": sample_idx,
+        "task": task,
+        "difficulty": difficulty,
+        "correct_solution": correct_solution,
+        "baseline_solution": baseline_solution,
+        "baseline_confidence": baseline_confidence,
+        "baseline_correct": baseline_correct,
+        "agent_solution": agent_solution,
+        "agent_confidence": agent_confidence,
+        "agent_correct": agent_correct,
+        "agent_reasoning": agent_reasoning,
+        "confidence_diff": confidence_diff,
+        "prior_agent_honesty": prior_agent_honesty,
+        "prior_agent_ability": prior_agent_ability,
+        "user_decision": user_decision,
+        "user_reasoning": user_reasoning,
+        "user_belief_agent_correct": user_belief_agent_correct,
+        "user_belief_agent_ability": user_belief_agent_ability,
+        "user_belief_honesty": user_belief_honesty,
+        "posterior_user_belief_agent_ability": posterior_user_belief_agent_ability,
+        "posterior_user_belief_honesty": posterior_user_belief_honesty,
+        "user_payoff": user_payoff,
+        "agent_payoff": agent_payoff,
+    }
+
+
+def sanitize_baseline_response(
+    response: Optional[AgentBaselineResponse],
+    correct_solution: str,
+) -> Dict[str, Any]:
+    """Sanitize baseline model response into normalized primitives with validity."""
+    if response is None:
+        return {
+            "is_valid": False,
+            "solution": "",
+            "confidence": 0.0,
+            "correct": False,
+        }
+    solution = normalize_text(response.solution) or ""
+    confidence = normalize_probability(response.confidence)
+    return {
+        "is_valid": confidence is not None,
+        "solution": solution,
+        "confidence": confidence if confidence is not None else 0.0,
+        "correct": evaluate_solution(solution, correct_solution),
+    }
+
+
+def sanitize_agent_game_response(
+    response: Optional[AgentGameResponse],
+    correct_solution: str,
+) -> Dict[str, Any]:
+    """Sanitize strategic agent response into normalized primitives with validity."""
+    if response is None:
+        return {
+            "is_valid": False,
+            "solution": "",
+            "confidence": 0.0,
+            "reasoning": "",
+            "correct": False,
+        }
+    solution = normalize_text(response.solution) or ""
+    confidence = normalize_probability(response.confidence)
+    reasoning = normalize_text(response.reasoning) or ""
+    return {
+        "is_valid": confidence is not None,
+        "solution": solution,
+        "confidence": confidence if confidence is not None else 0.0,
+        "reasoning": reasoning,
+        "correct": evaluate_solution(solution, correct_solution),
+    }
+
+
+def sanitize_user_decision_response(
+    response: Optional[UserDecisionResponse],
+) -> Dict[str, Any]:
+    """Sanitize user delegation response into normalized decision and beliefs."""
+    if response is None:
+        return {
+            "is_valid": False,
+            "decision": "SELF_SOLVE",
+            "reasoning": "",
+            "belief_agent_correct": 0.5,
+            "belief_agent_ability": 0.5,
+            "belief_honesty": 0.5,
+        }
+    decision = normalize_user_decision(response.decision)
+    belief_agent_correct = normalize_probability(response.belief_agent_correct)
+    belief_agent_ability = normalize_probability(response.belief_agent_ability)
+    belief_honesty = normalize_probability(response.belief_honesty)
+    return {
+        "is_valid": all(
+            (
+                decision is not None,
+                belief_agent_correct is not None,
+                belief_agent_ability is not None,
+                belief_honesty is not None,
+            )
+        ),
+        "decision": decision or "SELF_SOLVE",
+        "reasoning": normalize_text(response.reasoning) or "",
+        "belief_agent_correct": (
+            belief_agent_correct if belief_agent_correct is not None else 0.5
+        ),
+        "belief_agent_ability": (
+            belief_agent_ability if belief_agent_ability is not None else 0.5
+        ),
+        "belief_honesty": belief_honesty if belief_honesty is not None else 0.5,
+    }
+
+
+def sanitize_user_posterior_response(
+    response: Optional[UserPosteriorResponse],
+    *,
+    prior_agent_ability: Optional[float] = None,
+    prior_honesty: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Sanitize user posterior response into normalized beliefs."""
+    if response is None:
+        return {
+            "is_valid": False,
+            "reasoning": "",
+            "belief_agent_correct": None,
+            "belief_agent_ability": (
+                prior_agent_ability if prior_agent_ability is not None else 0.5
+            ),
+            "belief_honesty": prior_honesty if prior_honesty is not None else 0.5,
+        }
+    belief_agent_ability = normalize_probability(response.belief_agent_ability)
+    belief_honesty = normalize_probability(response.belief_honesty)
+    return {
+        "is_valid": belief_agent_ability is not None and belief_honesty is not None,
+        "reasoning": normalize_text(response.reasoning) or "",
+        "belief_agent_correct": normalize_probability(response.belief_agent_correct),
+        "belief_agent_ability": (
+            belief_agent_ability
+            if belief_agent_ability is not None
+            else (prior_agent_ability if prior_agent_ability is not None else 0.5)
+        ),
+        "belief_honesty": (
+            belief_honesty
+            if belief_honesty is not None
+            else (prior_honesty if prior_honesty is not None else 0.5)
+        ),
+    }
+
+
+def query_and_sanitize_baseline_response(
+    cfg: BaseGameConfig, task: str, correct_solution: str
+) -> Dict[str, Any]:
+    """Query baseline LLM and return sanitized response payload."""
+    try:
+        response = solve_task_without_game_context(cfg=cfg, task=task)
+    except Exception:
+        logger.exception("Error querying baseline LLM")
+        response = None
+    return sanitize_baseline_response(response, correct_solution)
+
+
+def query_and_sanitize_agent_game_response(
+    cfg: BaseGameConfig,
+    task: str,
+    correct_solution: str,
+    history: Optional[List[HistoryEntry]] = None,
+) -> Dict[str, Any]:
+    """Query strategic agent LLM and return sanitized response payload."""
+    try:
+        response = solve_task_with_game_context(cfg=cfg, task=task, history=history)
+    except Exception:
+        logger.exception("Error querying strategic agent LLM")
+        response = None
+    return sanitize_agent_game_response(response, correct_solution)
+
+
+def query_and_sanitize_user_decision_response(
+    cfg: BaseGameConfig,
+    reported_confidence: float,
+    history: List[HistoryEntry],
+    h_t: Optional[float] = None,
+    mu_t: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Query user-decision LLM and return sanitized response payload."""
+    try:
+        response = query_user_delegation(cfg, reported_confidence, history, h_t, mu_t)
+    except Exception:
+        logger.exception("Error querying user decision LLM")
+        response = None
+    return sanitize_user_decision_response(response)
+
+
+def query_and_sanitize_user_posterior_response(
+    cfg: BaseGameConfig,
+    reported_confidence: float,
+    agent_correct: bool,
+    prior_beliefs: Dict[str, Optional[float]],
+    history: List[HistoryEntry],
+) -> Dict[str, Any]:
+    """Query user-posterior LLM and return sanitized response payload."""
+    try:
+        response = query_user_posterior(
+            cfg=cfg,
+            reported_confidence=reported_confidence,
+            agent_correct=agent_correct,
+            prior_beliefs=prior_beliefs,
+            history=history,
+        )
+    except Exception:
+        logger.exception("Error querying user posterior LLM")
+        response = None
+    return sanitize_user_posterior_response(
+        response,
+        prior_agent_ability=prior_beliefs.get("belief_agent_ability"),
+        prior_honesty=prior_beliefs.get("belief_honesty"),
+    )
 
 
 # =============================================================================

@@ -11,15 +11,15 @@ from typing import TYPE_CHECKING
 
 __all__ = [
     "BaseGameConfig",
-    "SinglePlayerConfig",
-    "TwoPlayerConfig",
     "ConfidenceMode",
     "HistoryEntry",
     "TaskData",
     "RoundResult",
     "TrialStatistics",
-    "AgentResponse",
-    "UserResponse",
+    "AgentBaselineResponse",
+    "AgentGameResponse",
+    "UserDecisionResponse",
+    "UserPosteriorResponse",
     "evaluate_solution",
     "extract_task_from_dataset",
     "load_template",
@@ -28,20 +28,22 @@ __all__ = [
 
 if TYPE_CHECKING:
     from .llm_interface import (
-        AgentResponse,
+        AgentBaselineResponse,
+        AgentGameResponse,
         ConfidenceMode,
-        UserResponse,
+        UserDecisionResponse,
+        UserPosteriorResponse,
         load_template,
         query_llm,
     )
-    from .single_player import SinglePlayerConfig
-    from .two_player import TwoPlayerConfig
-    from .utils import (
+    from .datatypes import (
         BaseGameConfig,
         HistoryEntry,
         RoundResult,
         TaskData,
         TrialStatistics,
+    )
+    from .utils import (
         evaluate_solution,
         extract_task_from_dataset,
     )
@@ -49,13 +51,16 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str):
     if name in {
-        "SinglePlayerConfig",
-        "TwoPlayerConfig",
         "BaseGameConfig",
         "HistoryEntry",
         "TaskData",
         "RoundResult",
         "TrialStatistics",
+    }:
+        module = import_module(".datatypes", __name__)
+        return getattr(module, name)
+
+    if name in {
         "evaluate_solution",
         "extract_task_from_dataset",
     }:
@@ -64,8 +69,10 @@ def __getattr__(name: str):
 
     if name in {
         "ConfidenceMode",
-        "AgentResponse",
-        "UserResponse",
+        "AgentBaselineResponse",
+        "AgentGameResponse",
+        "UserDecisionResponse",
+        "UserPosteriorResponse",
         "load_template",
         "query_llm",
     }:
