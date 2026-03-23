@@ -49,6 +49,114 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+def _sample_round_context(
+    dataset: datasets.Dataset, round_idx: int, dataset_size: int
+) -> tuple[int, str, str, Optional[str]]:
+    sample_idx = random.randint(0, dataset_size - 1)
+    sample = dataset[sample_idx]
+    task_data: TaskData = extract_task_from_dataset(sample)
+    return (
+        sample_idx,
+        task_data["task"],
+        task_data["correct_solution"],
+        task_data["difficulty"],
+    )
+
+
+def _build_agent_history(history: List[HistoryEntry]) -> List[HistoryEntry]:
+    return [
+        {
+            "round": record["round"],
+            "reported_confidence": record["reported_confidence"],
+            "was_correct": record["was_correct"],
+            "user_decision": record["user_decision"],
+            "agent_payoff": record["agent_payoff"],
+        }
+        for record in history
+    ]
+
+
+def _build_round_result(
+    *,
+    round_idx: int,
+    sample_idx: int,
+    task: str,
+    difficulty: Optional[str],
+    correct_solution: str,
+    prior_honesty: float,
+    prior_ability: float,
+    baseline_solution: Optional[str],
+    baseline_confidence: Optional[float],
+    baseline_correct: Optional[bool],
+    agent_solution: Optional[str],
+    agent_confidence: Optional[float],
+    agent_correct: Optional[bool],
+    agent_reasoning: Optional[str],
+    user_decision: Optional[str] = None,
+    user_reasoning: Optional[str] = None,
+    user_belief_agent_correct: Optional[float] = None,
+    user_belief_agent_ability: Optional[float] = None,
+    user_belief_honesty: Optional[float] = None,
+    posterior_user_belief_agent_ability: Optional[float] = None,
+    posterior_user_belief_honesty: Optional[float] = None,
+    user_payoff: Optional[float] = None,
+    agent_payoff: Optional[float] = None,
+    include_user_snapshot: bool = True,
+) -> RoundResult:
+    return build_round_result(
+        round_idx=round_idx,
+        sample_idx=sample_idx,
+        task=task,
+        difficulty=difficulty,
+        correct_solution=correct_solution,
+        baseline_solution=baseline_solution,
+        baseline_confidence=baseline_confidence,
+        baseline_correct=baseline_correct,
+        agent_solution=agent_solution,
+        agent_confidence=agent_confidence,
+        agent_correct=agent_correct,
+        agent_reasoning=agent_reasoning,
+        confidence_diff=compute_confidence_diff(baseline_confidence, agent_confidence),
+        prior_agent_honesty=prior_honesty,
+        prior_agent_ability=prior_ability,
+        user_decision=user_decision,
+        user_reasoning=user_reasoning if include_user_snapshot else None,
+        user_belief_agent_correct=(
+            user_belief_agent_correct if include_user_snapshot else None
+        ),
+        user_belief_agent_ability=(
+            user_belief_agent_ability if include_user_snapshot else None
+        ),
+        user_belief_honesty=user_belief_honesty if include_user_snapshot else None,
+        posterior_user_belief_agent_ability=posterior_user_belief_agent_ability,
+        posterior_user_belief_honesty=posterior_user_belief_honesty,
+        user_payoff=user_payoff,
+        agent_payoff=agent_payoff,
+    )
+
+
+def _append_history_from_state(
+    *,
+    round_idx: int,
+    agent_confidence: float,
+    user_decision: str,
+    agent_correct: bool,
+    user_payoff: float,
+    agent_payoff: float,
+    history: List[HistoryEntry],
+) -> None:
+    history.append(
+        {
+            "round": round_idx,
+            "reported_confidence": agent_confidence,
+            "user_decision": user_decision,
+            "was_correct": agent_correct,
+            "user_payoff": user_payoff,
+            "agent_payoff": agent_payoff,
+        }
+    )
+
+
 def compute_payoffs(
     user_decision: str,
     agent_correct: Optional[bool],
@@ -88,109 +196,97 @@ def run_one_trial(
     mu_t = cfg.mu_0
 
     for round_idx in range(cfg.num_rounds):
-        sample_idx = random.randint(0, dataset_size - 1)
-        sample = dataset[sample_idx]
-        task_data: TaskData = extract_task_from_dataset(sample)
-        task = task_data["task"]
-        correct_solution = task_data["correct_solution"]
-        difficulty = task_data["difficulty"]
-
-        agent_history: List[HistoryEntry] = [
-            {
-                "round": record["round"],
-                "reported_confidence": record["reported_confidence"],
-                "was_correct": record["was_correct"],
-                "user_decision": record["user_decision"],
-                "agent_payoff": record["agent_payoff"],
-            }
-            for record in history
-        ]
+        sample_idx, task, correct_solution, difficulty = _sample_round_context(
+            dataset, round_idx, dataset_size
+        )
+        agent_history = _build_agent_history(history)
 
         baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
         agent = query_and_sanitize_agent_game_response(
             cfg, task, correct_solution, history=agent_history
         )
 
-        baseline_solution = baseline["solution"]
-        baseline_confidence = baseline["confidence"] if baseline["is_valid"] else None
-        baseline_correct = baseline["correct"] if baseline["is_valid"] else None
-        agent_solution = agent["solution"]
-        agent_confidence = agent["confidence"] if agent["is_valid"] else None
-        agent_reasoning = agent["reasoning"] if agent["is_valid"] else None
-        agent_correct = agent["correct"] if agent["is_valid"] else None
+        baseline_solution = baseline.solution
+        baseline_confidence = baseline.confidence
+        baseline_correct = baseline.correct
+        agent_solution = agent.solution
+        agent_confidence = agent.confidence
+        agent_reasoning = agent.reasoning
+        agent_correct = agent.correct
 
-        if not agent["is_valid"]:
+        if not agent.is_valid:
             logger.warning(
                 "Missing agent confidence (trial=%s, round=%s); recording failed round",
                 trial_idx,
                 round_idx,
             )
-            round_result = build_round_result(
-                round_idx=round_idx,
-                sample_idx=sample_idx,
-                task=task,
-                difficulty=difficulty,
-                correct_solution=correct_solution,
-                baseline_solution=baseline_solution,
-                baseline_confidence=baseline_confidence,
-                baseline_correct=baseline_correct,
-                agent_solution=agent_solution,
-                agent_confidence=agent_confidence,
-                agent_correct=agent_correct,
-                agent_reasoning=agent_reasoning,
-                confidence_diff=None,
-                prior_agent_honesty=h_t,
-                prior_agent_ability=mu_t,
+            round_results.append(
+                _build_round_result(
+                    round_idx=round_idx,
+                    sample_idx=sample_idx,
+                    task=task,
+                    difficulty=difficulty,
+                    correct_solution=correct_solution,
+                    prior_honesty=h_t,
+                    prior_ability=mu_t,
+                    baseline_solution=baseline_solution,
+                    baseline_confidence=baseline_confidence,
+                    baseline_correct=baseline_correct,
+                    agent_solution=agent_solution,
+                    agent_confidence=agent_confidence,
+                    agent_correct=agent_correct,
+                    agent_reasoning=agent_reasoning,
+                    include_user_snapshot=False,
+                )
             )
-            round_results.append(round_result)
             if progress:
                 progress.update(1)
             continue
 
         user = query_and_sanitize_user_decision_response(
-            cfg, agent["confidence"], history, h_t, mu_t
+            cfg, agent_confidence, history, h_t, mu_t
         )
-        user_decision = user["decision"]
-        user_reasoning = user["reasoning"]
-        user_belief_agent_correct = user["belief_agent_correct"]
-        user_belief_agent_ability = user["belief_agent_ability"]
-        user_belief_honesty = user["belief_honesty"]
+        user_decision = user.decision
+        user_reasoning = user.reasoning
+        user_belief_agent_correct = user.belief_agent_correct
+        user_belief_agent_ability = user.belief_agent_ability
+        user_belief_honesty = user.belief_honesty
 
-        if not user["is_valid"]:
+        if not user.is_valid:
             logger.warning(
                 "Invalid user decision payload (trial=%s, round=%s); recording failed round",
                 trial_idx,
                 round_idx,
             )
-            round_result = build_round_result(
-                round_idx=round_idx,
-                sample_idx=sample_idx,
-                task=task,
-                difficulty=difficulty,
-                correct_solution=correct_solution,
-                baseline_solution=baseline_solution,
-                baseline_confidence=baseline_confidence,
-                baseline_correct=baseline_correct,
-                agent_solution=agent_solution,
-                agent_confidence=agent_confidence,
-                agent_correct=agent_correct,
-                agent_reasoning=agent_reasoning,
-                confidence_diff=compute_confidence_diff(
-                    baseline_confidence, agent_confidence
-                ),
-                prior_agent_honesty=h_t,
-                prior_agent_ability=mu_t,
-                user_decision=None,
-                user_reasoning=user_reasoning,
-                user_belief_agent_correct=user_belief_agent_correct,
-                user_belief_agent_ability=user_belief_agent_ability,
-                user_belief_honesty=user_belief_honesty,
+            round_results.append(
+                _build_round_result(
+                    round_idx=round_idx,
+                    sample_idx=sample_idx,
+                    task=task,
+                    difficulty=difficulty,
+                    correct_solution=correct_solution,
+                    prior_honesty=h_t,
+                    prior_ability=mu_t,
+                    baseline_solution=baseline_solution,
+                    baseline_confidence=baseline_confidence,
+                    baseline_correct=baseline_correct,
+                    agent_solution=agent_solution,
+                    agent_confidence=agent_confidence,
+                    agent_correct=agent_correct,
+                    agent_reasoning=agent_reasoning,
+                    user_reasoning=user_reasoning,
+                    user_belief_agent_correct=user_belief_agent_correct,
+                    user_belief_agent_ability=user_belief_agent_ability,
+                    user_belief_honesty=user_belief_honesty,
+                    include_user_snapshot=True,
+                )
             )
-            round_results.append(round_result)
             if progress:
                 progress.update(1)
             continue
 
+        assert user_decision is not None
+        assert agent_correct is not None
         payoffs = compute_payoffs(
             user_decision,
             agent_correct,
@@ -199,11 +295,8 @@ def run_one_trial(
             cfg.effort,
         )
 
-        confidence_diff = compute_confidence_diff(baseline_confidence, agent_confidence)
-
-        # If delegated, ask user to update posterior beliefs after observing outcome
-        posterior_user_belief_agent_ability = None
-        posterior_user_belief_honesty = None
+        posterior_user_belief_agent_ability = user_belief_agent_ability
+        posterior_user_belief_honesty = user_belief_honesty
         if user_decision == "DELEGATE":
             prior_beliefs = {
                 "belief_agent_correct": user_belief_agent_correct,
@@ -212,59 +305,59 @@ def run_one_trial(
             }
             posterior = query_and_sanitize_user_posterior_response(
                 cfg=cfg,
-                reported_confidence=agent["confidence"],
-                agent_correct=agent["correct"],
+                reported_confidence=agent_confidence,
+                agent_correct=agent_correct,
                 prior_beliefs=prior_beliefs,
                 history=history,
             )
-            posterior_user_belief_agent_ability = posterior["belief_agent_ability"]
-            posterior_user_belief_honesty = posterior["belief_honesty"]
-        else:
-            # No delegated outcome observed; posterior equals prior beliefs
-            posterior_user_belief_agent_ability = user_belief_agent_ability
-            posterior_user_belief_honesty = user_belief_honesty
+            if posterior.belief_agent_ability is not None:
+                posterior_user_belief_agent_ability = posterior.belief_agent_ability
+            if posterior.belief_honesty is not None:
+                posterior_user_belief_honesty = posterior.belief_honesty
 
-        round_result = build_round_result(
-            round_idx=round_idx,
-            sample_idx=sample_idx,
-            task=task,
-            difficulty=difficulty,
-            correct_solution=correct_solution,
-            baseline_solution=baseline_solution,
-            baseline_confidence=baseline_confidence,
-            baseline_correct=baseline_correct,
-            agent_solution=agent_solution,
-            agent_confidence=agent_confidence,
-            agent_correct=agent_correct,
-            agent_reasoning=agent_reasoning,
-            confidence_diff=confidence_diff,
-            prior_agent_honesty=h_t,
-            prior_agent_ability=mu_t,
-            user_decision=user_decision,
-            user_reasoning=user_reasoning,
-            user_belief_agent_correct=user_belief_agent_correct,
-            user_belief_agent_ability=user_belief_agent_ability,
-            user_belief_honesty=user_belief_honesty,
-            posterior_user_belief_agent_ability=posterior_user_belief_agent_ability,
-            posterior_user_belief_honesty=posterior_user_belief_honesty,
-            user_payoff=payoffs["user_payoff"],
-            agent_payoff=payoffs["agent_payoff"],
+        round_results.append(
+            _build_round_result(
+                round_idx=round_idx,
+                sample_idx=sample_idx,
+                task=task,
+                difficulty=difficulty,
+                correct_solution=correct_solution,
+                prior_honesty=h_t,
+                prior_ability=mu_t,
+                baseline_solution=baseline_solution,
+                baseline_confidence=baseline_confidence,
+                baseline_correct=baseline_correct,
+                agent_solution=agent_solution,
+                agent_confidence=agent_confidence,
+                agent_correct=agent_correct,
+                agent_reasoning=agent_reasoning,
+                user_decision=user_decision,
+                user_reasoning=user_reasoning,
+                user_belief_agent_correct=user_belief_agent_correct,
+                user_belief_agent_ability=user_belief_agent_ability,
+                user_belief_honesty=user_belief_honesty,
+                posterior_user_belief_agent_ability=posterior_user_belief_agent_ability,
+                posterior_user_belief_honesty=posterior_user_belief_honesty,
+                user_payoff=payoffs["user_payoff"],
+                agent_payoff=payoffs["agent_payoff"],
+            )
         )
+
         if posterior_user_belief_honesty is not None:
             h_t = posterior_user_belief_honesty
         if posterior_user_belief_agent_ability is not None:
             mu_t = posterior_user_belief_agent_ability
-        round_results.append(round_result)
 
-        history_entry: HistoryEntry = {
-            "round": round_idx,
-            "reported_confidence": agent["confidence"],
-            "user_decision": user_decision,
-            "was_correct": agent["correct"],
-            "user_payoff": payoffs["user_payoff"],
-            "agent_payoff": payoffs["agent_payoff"],
-        }
-        history.append(history_entry)
+        if payoffs["user_payoff"] is not None and payoffs["agent_payoff"] is not None:
+            _append_history_from_state(
+                round_idx=round_idx,
+                agent_confidence=agent_confidence,
+                user_decision=user_decision,
+                agent_correct=agent_correct,
+                user_payoff=payoffs["user_payoff"],
+                agent_payoff=payoffs["agent_payoff"],
+                history=history,
+            )
 
         if progress:
             progress.update(1)

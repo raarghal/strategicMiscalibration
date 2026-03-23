@@ -15,6 +15,10 @@ from .datatypes import (
     BaseGameConfig,
     HistoryEntry,
     RoundResult,
+    SanitizedAgentGameResponse,
+    SanitizedBaselineResponse,
+    SanitizedUserDecisionResponse,
+    SanitizedUserPosteriorResponse,
     TaskData,
 )
 from .llm_interface import (
@@ -203,127 +207,133 @@ def build_round_result(
 def sanitize_baseline_response(
     response: Optional[AgentBaselineResponse],
     correct_solution: str,
-) -> Dict[str, Any]:
+) -> SanitizedBaselineResponse:
     """Sanitize baseline model response into normalized primitives with validity."""
     if response is None:
-        return {
-            "is_valid": False,
-            "solution": "",
-            "confidence": 0.0,
-            "correct": False,
-        }
-    solution = normalize_text(response.solution) or ""
+        return SanitizedBaselineResponse(
+            is_valid=False,
+            solution=None,
+            confidence=None,
+            correct=None,
+        )
+    solution = normalize_text(response.solution)
     confidence = normalize_probability(response.confidence)
-    return {
-        "is_valid": confidence is not None,
-        "solution": solution,
-        "confidence": confidence if confidence is not None else 0.0,
-        "correct": evaluate_solution(solution, correct_solution),
-    }
+    correct = (
+        evaluate_solution(solution, correct_solution) if solution is not None else None
+    )
+    is_valid = solution is not None and confidence is not None and correct is not None
+    return SanitizedBaselineResponse(
+        is_valid=is_valid,
+        solution=solution,
+        confidence=confidence,
+        correct=correct,
+    )
 
 
 def sanitize_agent_game_response(
     response: Optional[AgentGameResponse],
     correct_solution: str,
-) -> Dict[str, Any]:
+) -> SanitizedAgentGameResponse:
     """Sanitize strategic agent response into normalized primitives with validity."""
     if response is None:
-        return {
-            "is_valid": False,
-            "solution": "",
-            "confidence": 0.0,
-            "reasoning": "",
-            "correct": False,
-        }
-    solution = normalize_text(response.solution) or ""
+        return SanitizedAgentGameResponse(
+            is_valid=False,
+            solution=None,
+            confidence=None,
+            reasoning=None,
+            correct=None,
+        )
+    solution = normalize_text(response.solution)
     confidence = normalize_probability(response.confidence)
-    reasoning = normalize_text(response.reasoning) or ""
-    return {
-        "is_valid": confidence is not None,
-        "solution": solution,
-        "confidence": confidence if confidence is not None else 0.0,
-        "reasoning": reasoning,
-        "correct": evaluate_solution(solution, correct_solution),
-    }
+    reasoning = normalize_text(response.reasoning)
+    correct = (
+        evaluate_solution(solution, correct_solution) if solution is not None else None
+    )
+    is_valid = (
+        solution is not None
+        and confidence is not None
+        and reasoning is not None
+        and correct is not None
+    )
+    return SanitizedAgentGameResponse(
+        is_valid=is_valid,
+        solution=solution,
+        confidence=confidence,
+        reasoning=reasoning,
+        correct=correct,
+    )
 
 
 def sanitize_user_decision_response(
     response: Optional[UserDecisionResponse],
-) -> Dict[str, Any]:
+) -> SanitizedUserDecisionResponse:
     """Sanitize user delegation response into normalized decision and beliefs."""
     if response is None:
-        return {
-            "is_valid": False,
-            "decision": "SELF_SOLVE",
-            "reasoning": "",
-            "belief_agent_correct": 0.5,
-            "belief_agent_ability": 0.5,
-            "belief_honesty": 0.5,
-        }
+        return SanitizedUserDecisionResponse(
+            is_valid=False,
+            decision=None,
+            reasoning=None,
+            belief_agent_correct=None,
+            belief_agent_ability=None,
+            belief_honesty=None,
+        )
     decision = normalize_user_decision(response.decision)
+    reasoning = normalize_text(response.reasoning)
     belief_agent_correct = normalize_probability(response.belief_agent_correct)
     belief_agent_ability = normalize_probability(response.belief_agent_ability)
     belief_honesty = normalize_probability(response.belief_honesty)
-    return {
-        "is_valid": all(
-            (
-                decision is not None,
-                belief_agent_correct is not None,
-                belief_agent_ability is not None,
-                belief_honesty is not None,
-            )
-        ),
-        "decision": decision or "SELF_SOLVE",
-        "reasoning": normalize_text(response.reasoning) or "",
-        "belief_agent_correct": (
-            belief_agent_correct if belief_agent_correct is not None else 0.5
-        ),
-        "belief_agent_ability": (
-            belief_agent_ability if belief_agent_ability is not None else 0.5
-        ),
-        "belief_honesty": belief_honesty if belief_honesty is not None else 0.5,
-    }
+    is_valid = all(
+        (
+            decision is not None,
+            reasoning is not None,
+            belief_agent_correct is not None,
+            belief_agent_ability is not None,
+            belief_honesty is not None,
+        )
+    )
+    return SanitizedUserDecisionResponse(
+        is_valid=is_valid,
+        decision=decision,
+        reasoning=reasoning,
+        belief_agent_correct=belief_agent_correct,
+        belief_agent_ability=belief_agent_ability,
+        belief_honesty=belief_honesty,
+    )
 
 
 def sanitize_user_posterior_response(
     response: Optional[UserPosteriorResponse],
-    *,
-    prior_agent_ability: Optional[float] = None,
-    prior_honesty: Optional[float] = None,
-) -> Dict[str, Any]:
+) -> SanitizedUserPosteriorResponse:
     """Sanitize user posterior response into normalized beliefs."""
     if response is None:
-        return {
-            "is_valid": False,
-            "reasoning": "",
-            "belief_agent_correct": None,
-            "belief_agent_ability": (
-                prior_agent_ability if prior_agent_ability is not None else 0.5
-            ),
-            "belief_honesty": prior_honesty if prior_honesty is not None else 0.5,
-        }
+        return SanitizedUserPosteriorResponse(
+            is_valid=False,
+            reasoning=None,
+            belief_agent_correct=None,
+            belief_agent_ability=None,
+            belief_honesty=None,
+        )
+    reasoning = normalize_text(response.reasoning)
     belief_agent_ability = normalize_probability(response.belief_agent_ability)
     belief_honesty = normalize_probability(response.belief_honesty)
-    return {
-        "is_valid": belief_agent_ability is not None and belief_honesty is not None,
-        "reasoning": normalize_text(response.reasoning) or "",
-        "belief_agent_correct": normalize_probability(response.belief_agent_correct),
-        "belief_agent_ability": (
-            belief_agent_ability
-            if belief_agent_ability is not None
-            else (prior_agent_ability if prior_agent_ability is not None else 0.5)
-        ),
-        "belief_honesty": (
-            belief_honesty
-            if belief_honesty is not None
-            else (prior_honesty if prior_honesty is not None else 0.5)
-        ),
-    }
+    belief_agent_correct = normalize_probability(response.belief_agent_correct)
+    is_valid = (
+        reasoning is not None
+        and belief_agent_ability is not None
+        and belief_honesty is not None
+    )
+    return SanitizedUserPosteriorResponse(
+        is_valid=is_valid,
+        reasoning=reasoning,
+        belief_agent_correct=belief_agent_correct,
+        belief_agent_ability=belief_agent_ability,
+        belief_honesty=belief_honesty,
+    )
 
 
 def query_and_sanitize_baseline_response(
     cfg: BaseGameConfig, task: str, correct_solution: str
-) -> Dict[str, Any]:
+) -> SanitizedBaselineResponse:
     """Query baseline LLM and return sanitized response payload."""
     try:
         response = solve_task_without_game_context(cfg=cfg, task=task)
@@ -338,7 +348,7 @@ def query_and_sanitize_agent_game_response(
     task: str,
     correct_solution: str,
     history: Optional[List[HistoryEntry]] = None,
-) -> Dict[str, Any]:
+) -> SanitizedAgentGameResponse:
     """Query strategic agent LLM and return sanitized response payload."""
     try:
         response = solve_task_with_game_context(cfg=cfg, task=task, history=history)
@@ -354,7 +364,7 @@ def query_and_sanitize_user_decision_response(
     history: List[HistoryEntry],
     h_t: Optional[float] = None,
     mu_t: Optional[float] = None,
-) -> Dict[str, Any]:
+) -> SanitizedUserDecisionResponse:
     """Query user-decision LLM and return sanitized response payload."""
     try:
         response = query_user_delegation(cfg, reported_confidence, history, h_t, mu_t)
@@ -370,7 +380,7 @@ def query_and_sanitize_user_posterior_response(
     agent_correct: bool,
     prior_beliefs: Dict[str, Optional[float]],
     history: List[HistoryEntry],
-) -> Dict[str, Any]:
+) -> SanitizedUserPosteriorResponse:
     """Query user-posterior LLM and return sanitized response payload."""
     try:
         response = query_user_posterior(
@@ -383,11 +393,7 @@ def query_and_sanitize_user_posterior_response(
     except Exception:
         logger.exception("Error querying user posterior LLM")
         response = None
-    return sanitize_user_posterior_response(
-        response,
-        prior_agent_ability=prior_beliefs.get("belief_agent_ability"),
-        prior_honesty=prior_beliefs.get("belief_honesty"),
-    )
+    return sanitize_user_posterior_response(response)
 
 
 # =============================================================================

@@ -113,6 +113,42 @@ class TrialStatistics(TypedDict, total=False):
     mean_agent_payoff: float
 
 
+@dataclass(frozen=True)
+class SanitizedBaselineResponse:
+    is_valid: bool
+    solution: Optional[str]
+    confidence: Optional[float]
+    correct: Optional[bool]
+
+
+@dataclass(frozen=True)
+class SanitizedAgentGameResponse:
+    is_valid: bool
+    solution: Optional[str]
+    confidence: Optional[float]
+    reasoning: Optional[str]
+    correct: Optional[bool]
+
+
+@dataclass(frozen=True)
+class SanitizedUserDecisionResponse:
+    is_valid: bool
+    decision: Optional[str]
+    reasoning: Optional[str]
+    belief_agent_correct: Optional[float]
+    belief_agent_ability: Optional[float]
+    belief_honesty: Optional[float]
+
+
+@dataclass(frozen=True)
+class SanitizedUserPosteriorResponse:
+    is_valid: bool
+    reasoning: Optional[str]
+    belief_agent_correct: Optional[float]
+    belief_agent_ability: Optional[float]
+    belief_honesty: Optional[float]
+
+
 # =============================================================================
 # Base Configuration
 # =============================================================================

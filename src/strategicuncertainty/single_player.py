@@ -19,7 +19,12 @@ from typing import Any, Dict, List
 import datasets
 from tqdm import tqdm
 
-from .datatypes import BaseGameConfig, RoundResult, TaskData, TrialStatistics
+from .datatypes import (
+    BaseGameConfig,
+    RoundResult,
+    TaskData,
+    TrialStatistics,
+)
 from .utils import (
     aggregate_trial_stats,
     build_round_result,
@@ -35,6 +40,50 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sample_round_context(
+    dataset: datasets.Dataset, round_idx: int, dataset_size: int
+) -> tuple[int, str, str, str | None]:
+    sample_idx = random.randint(0, dataset_size - 1)
+    sample = dataset[sample_idx]
+    task_data: TaskData = extract_task_from_dataset(sample)
+    return (
+        sample_idx,
+        task_data["task"],
+        task_data["correct_solution"],
+        task_data["difficulty"],
+    )
+
+
+def _run_single_round(
+    cfg: BaseGameConfig,
+    round_idx: int,
+    sample_idx: int,
+    task: str,
+    correct_solution: str,
+    difficulty: str | None,
+) -> RoundResult:
+    baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
+    agent = query_and_sanitize_agent_game_response(
+        cfg, task, correct_solution, history=None
+    )
+    confidence_diff = compute_confidence_diff(baseline.confidence, agent.confidence)
+
+    return build_round_result(
+        round_idx=round_idx,
+        sample_idx=sample_idx,
+        task=task,
+        difficulty=difficulty,
+        correct_solution=correct_solution,
+        baseline_solution=baseline.solution,
+        baseline_confidence=baseline.confidence,
+        baseline_correct=baseline.correct,
+        agent_solution=agent.solution,
+        agent_confidence=agent.confidence,
+        agent_correct=agent.correct,
+        confidence_diff=confidence_diff,
+    )
 
 
 def run_one_trial(
@@ -68,48 +117,18 @@ def run_one_trial(
     dataset_size = len(dataset)
 
     for round_idx in range(cfg.num_rounds):
-        # Sample a random task from the dataset
-        sample_idx = random.randint(0, dataset_size - 1)
-        sample = dataset[sample_idx]
-
-        # Extract task, correct solution, and difficulty
-        task_data: TaskData = extract_task_from_dataset(sample)
-        task = task_data["task"]
-        correct_solution = task_data["correct_solution"]
-        difficulty = task_data["difficulty"]
-
-        baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
-        agent = query_and_sanitize_agent_game_response(
-            cfg, task, correct_solution, history=None
+        sample_idx, task, correct_solution, difficulty = _sample_round_context(
+            dataset, round_idx, dataset_size
         )
-
-        baseline_solution = baseline["solution"]
-        baseline_confidence = baseline["confidence"] if baseline["is_valid"] else None
-        baseline_correct = baseline["correct"] if baseline["is_valid"] else None
-        agent_solution = agent["solution"]
-        agent_confidence = agent["confidence"] if agent["is_valid"] else None
-        agent_correct = agent["correct"] if agent["is_valid"] else None
-
-        # Calculate confidence difference (key metric for strategic behavior)
-        confidence_diff = compute_confidence_diff(baseline_confidence, agent_confidence)
-
-        # Record the results
-        round_result = build_round_result(
-            round_idx=round_idx,
-            sample_idx=sample_idx,
-            task=task,
-            difficulty=difficulty,
-            correct_solution=correct_solution,
-            baseline_solution=baseline_solution,
-            baseline_confidence=baseline_confidence,
-            baseline_correct=baseline_correct,
-            agent_solution=agent_solution,
-            agent_confidence=agent_confidence,
-            agent_correct=agent_correct,
-            confidence_diff=confidence_diff,
+        round_result = _run_single_round(
+            cfg,
+            round_idx,
+            sample_idx,
+            task,
+            correct_solution,
+            difficulty,
         )
         round_results.append(round_result)
-
         progress.update(1)
 
     # Compute trial statistics
