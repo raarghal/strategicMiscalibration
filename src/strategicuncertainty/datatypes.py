@@ -51,6 +51,7 @@ class RoundResult(TypedDict, total=False):
     agent_solution: Optional[str]
     agent_confidence: Optional[float]
     agent_correct: Optional[bool]
+    agent_reasoning: Optional[str]
     # Comparison metrics
     confidence_diff: Optional[float]
     # User priors
