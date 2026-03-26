@@ -11,61 +11,68 @@ from typing import TYPE_CHECKING
 
 __all__ = [
     "BaseGameConfig",
-    "SinglePlayerConfig",
-    "TwoPlayerConfig",
     "ConfidenceMode",
     "HistoryEntry",
-    "QuestionData",
+    "TaskData",
     "RoundResult",
     "TrialStatistics",
-    "ModelResponse",
-    "UserResponse",
-    "evaluate_answer",
-    "extract_question_from_dataset",
+    "AgentBaselineResponse",
+    "AgentGameResponse",
+    "UserDecisionResponse",
+    "UserPosteriorResponse",
+    "evaluate_solution",
+    "extract_task_from_dataset",
     "load_template",
     "query_llm",
 ]
 
 if TYPE_CHECKING:
     from .llm_interface import (
+        AgentBaselineResponse,
+        AgentGameResponse,
         ConfidenceMode,
-        ModelResponse,
-        UserResponse,
+        UserDecisionResponse,
+        UserPosteriorResponse,
         load_template,
         query_llm,
     )
-    from .single_player import SinglePlayerConfig
-    from .two_player import TwoPlayerConfig
-    from .utils import (
+    from .datatypes import (
         BaseGameConfig,
         HistoryEntry,
-        QuestionData,
         RoundResult,
+        TaskData,
         TrialStatistics,
-        evaluate_answer,
-        extract_question_from_dataset,
+    )
+    from .utils import (
+        evaluate_solution,
+        extract_task_from_dataset,
     )
 
 
 def __getattr__(name: str):
     if name in {
-        "SinglePlayerConfig",
-        "TwoPlayerConfig",
         "BaseGameConfig",
         "HistoryEntry",
-        "QuestionData",
+        "TaskData",
         "RoundResult",
         "TrialStatistics",
-        "evaluate_answer",
-        "extract_question_from_dataset",
+    }:
+        module = import_module(".datatypes", __name__)
+        return getattr(module, name)
+
+    if name in {
+        "evaluate_solution",
+        "extract_task_from_dataset",
     }:
         module = import_module(".utils", __name__)
         return getattr(module, name)
 
     if name in {
         "ConfidenceMode",
-        "ModelResponse",
-        "UserResponse",
+        "AgentBaselineResponse",
+        "AgentGameResponse",
+        "UserDecisionResponse",
+        "UserPosteriorResponse",
         "load_template",
         "query_llm",
     }:

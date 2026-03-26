@@ -1,367 +1,287 @@
 """
-Two-player strategic uncertainty experiment.
+Two-player strategic delegation experiment.
 
-This module simulates both the model and the user with LLMs:
-1. Model LLM: Answers questions and reports confidence scores
-2. User LLM: Sees reported confidence, decides whether to purchase, observes outcomes
+This module simulates both the agent and the user with LLMs:
+1. Agent LLM: Solves tasks and reports confidence scores.
+2. User LLM: Sees the reported confidence, decides whether to delegate (paying cost c)
+   or self-solve, and observes outcomes when delegation occurs.
 
-This creates a repeated game with reputation dynamics where both players can learn.
+The repeated interaction creates reputation dynamics where both players can adapt.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import random
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import datasets
+import pandas as pd
 from tqdm import tqdm
 
-from .llm_interface import (
-    UserResponse,
-    load_template,
-    query_llm,
-)
+from .datatypes import BaseGameConfig, HistoryEntry, RoundResult, TrialStatistics
 from .utils import (
-    TEMPLATE_DIR,
-    BaseGameConfig,
-    HistoryEntry,
-    QuestionData,
-    RoundResult,
-    TrialStatistics,
     aggregate_trial_stats,
-    ask_baseline,
-    ask_with_game_context,
+    build_round_result,
+    compute_agent_stats,
     compute_baseline_stats,
     compute_confidence_comparison_stats,
+    compute_confidence_diff,
     compute_mean,
-    compute_model_stats,
-    evaluate_answer,
-    extract_question_from_dataset,
+    extract_task_from_dataset,
+    normalize_finite_float,
+    query_and_sanitize_agent_game_response,
+    query_and_sanitize_baseline_response,
+    query_and_sanitize_user_decision_response,
+    query_and_sanitize_user_posterior_response,
     sum_trial_stats,
 )
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TwoPlayerConfig(BaseGameConfig):
-    """
-    Configuration for running the two-player strategic uncertainty experiment.
-
-    Extends BaseGameConfig with two-player specific settings.
-    """
-
-    # -------------------------------------------------------------------------
-    # LLM Configuration
-    # -------------------------------------------------------------------------
-    model_llm_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    user_llm_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-
-    # -------------------------------------------------------------------------
-    # Prompt Templates (override user template)
-    # -------------------------------------------------------------------------
-    user_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "user_prompt.j2"
-    )
-
-
-def ask_user_llm(
-    cfg: TwoPlayerConfig,
-    reported_confidence: float,
-    history: List[HistoryEntry],
-) -> UserResponse:
-    """
-    Query the user LLM with the reported confidence and interaction history.
-
-    The user LLM does NOT see the question - only the reported confidence
-    and the history of past interactions.
-
-    Args:
-        cfg: Game configuration
-        reported_confidence: The confidence score reported by the model LLM
-        history: List of past interaction records
-
-    Returns:
-        UserResponse with decision and belief
-    """
-    logger.debug(f"Asking user LLM with confidence {reported_confidence}")
-    threshold = cfg.compute_threshold()
-
-    # Compute summary statistics for the history
-    # IMPORTANT: User only knows correctness for rounds they purchased
-    purchase_count = 0
-    purchased_correct = 0
-    high_confidence_purchased_count = 0
-    high_confidence_purchased_correct = 0
-    total_payoff = 0.0
-
-    for h in history:
-        total_payoff += h.get("user_payoff", 0)
-        if h.get("user_decision") == "PURCHASE":
-            purchase_count += 1
-            if h.get("was_correct"):
-                purchased_correct += 1
-            if h.get("reported_confidence", 0) >= threshold:
-                high_confidence_purchased_count += 1
-                if h.get("was_correct"):
-                    high_confidence_purchased_correct += 1
-
-    purchased_accuracy = (
-        purchased_correct / purchase_count if purchase_count > 0 else "N/A"
-    )
-    high_confidence_purchased_accuracy = (
-        high_confidence_purchased_correct / high_confidence_purchased_count
-        if high_confidence_purchased_count > 0
-        else "N/A"
-    )
-
-    prompt = load_template(
-        cfg.user_template_path,
-        reported_confidence=reported_confidence,
-        history=history,
-        threshold=threshold,
-        reward=cfg.reward,
-        cost=cfg.cost,
-        purchase_count=purchase_count,
-        purchased_accuracy=purchased_accuracy,
-        high_confidence_purchased_count=high_confidence_purchased_count,
-        high_confidence_purchased_accuracy=high_confidence_purchased_accuracy,
-        total_payoff=total_payoff,
-        confidence_mode=cfg.confidence_mode.value,
-    )
-
-    return query_llm(
-        cfg.user_llm_name, prompt, UserResponse, cfg.max_tokens, cfg.temperature
-    )
+def _build_agent_history(history: List[HistoryEntry]) -> List[HistoryEntry]:
+    """Project full history into the subset visible to the strategic agent."""
+    return [
+        {
+            "round": record["round"],
+            "reported_confidence": record["reported_confidence"],
+            "was_correct": record["was_correct"],
+            "user_decision": record["user_decision"],
+            "agent_payoff": record["agent_payoff"],
+        }
+        for record in history
+    ]
 
 
 def compute_payoffs(
     user_decision: str,
-    model_correct: bool,
+    agent_correct: Optional[bool],
     reward: float,
     cost: float,
-) -> Dict[str, float]:
-    """
-    Compute payoffs for both players based on the user's decision and model's correctness.
+    effort: float,
+) -> Dict[str, Optional[float]]:
+    """Compute payoffs for both players based on the user's decision, agent correctness, and self-solve effort."""
+    if user_decision == "DELEGATE":
+        if agent_correct is None:
+            raise ValueError(
+                "agent_correct must be known when user_decision is DELEGATE"
+            )
+        agent_payoff = cost
+        user_payoff = reward - cost if agent_correct else -cost
+    else:
+        # User self-solves:
+        # Deterministic outcome: earns reward minus effort cost
+        agent_payoff = 0.0
+        user_payoff = reward - effort
 
-    Args:
-        user_decision: "PURCHASE" or "IGNORE"
-        model_correct: Whether the model's answer was correct
-        reward: The reward for correct answer
-        cost: The cost of purchasing
+    return {"user_payoff": user_payoff, "agent_payoff": agent_payoff}
+
+
+def _resolve_user_interaction(
+    *,
+    cfg: BaseGameConfig,
+    trial_idx: int,
+    round_idx: int,
+    history: List[HistoryEntry],
+    prior_h: float,
+    prior_mu: float,
+    agent_confidence: Optional[float],
+    agent_correct: Optional[bool],
+    agent_response_valid: bool,
+) -> tuple[Dict[str, Any], Optional[HistoryEntry], float, float]:
+    """Resolve user-side interaction for one round.
 
     Returns:
-        Dictionary with 'user_payoff' and 'model_payoff'
+        tuple containing:
+        - round field updates to merge into `build_round_result` payload
+        - optional history entry (only when payoff fields are valid)
+        - updated honesty belief
+        - updated ability belief
     """
-    if user_decision == "PURCHASE":
-        model_payoff = cost
-        if model_correct:
-            user_payoff = reward - cost
-        else:
-            user_payoff = -cost
-    else:
-        model_payoff = 0.0
-        # User ignores - 50% chance of success by themselves
-        if random.random() < 0.5:
-            user_payoff = reward
-        else:
-            user_payoff = 0.0
+    round_updates: Dict[str, Any] = {}
+    updated_h = prior_h
+    updated_mu = prior_mu
 
-    return {"user_payoff": user_payoff, "model_payoff": model_payoff}
+    if not agent_response_valid or agent_confidence is None:
+        logger.warning(
+            "Missing agent confidence (trial=%s, round=%s); recording failed round",
+            trial_idx,
+            round_idx,
+        )
+        return round_updates, None, updated_h, updated_mu
+
+    user_response = query_and_sanitize_user_decision_response(
+        cfg, agent_confidence, history, prior_h, prior_mu
+    )
+    user_decision = user_response.decision
+    user_reasoning = user_response.reasoning
+    user_belief_agent_correct = user_response.belief_agent_correct
+    user_belief_agent_ability = user_response.belief_agent_ability
+    user_belief_honesty = user_response.belief_honesty
+    posterior_user_belief_agent_ability = user_belief_agent_ability
+    posterior_user_belief_honesty = user_belief_honesty
+
+    round_updates.update(
+        {
+            "user_decision": user_decision,
+            "user_reasoning": user_reasoning,
+            "user_belief_agent_correct": user_belief_agent_correct,
+            "user_belief_agent_ability": user_belief_agent_ability,
+            "user_belief_honesty": user_belief_honesty,
+            "posterior_user_belief_agent_ability": posterior_user_belief_agent_ability,
+            "posterior_user_belief_honesty": posterior_user_belief_honesty,
+        }
+    )
+
+    if not user_response.is_valid:
+        logger.warning(
+            "Invalid user decision payload (trial=%s, round=%s); recording failed round",
+            trial_idx,
+            round_idx,
+        )
+        return round_updates, None, updated_h, updated_mu
+
+    assert user_decision is not None
+    assert agent_correct is not None
+    payoffs = compute_payoffs(
+        user_decision,
+        agent_correct,
+        cfg.reward,
+        cfg.cost,
+        cfg.effort,
+    )
+    user_payoff = payoffs["user_payoff"]
+    agent_payoff = payoffs["agent_payoff"]
+
+    if user_decision == "DELEGATE":
+        prior_beliefs = {
+            "belief_agent_correct": user_belief_agent_correct,
+            "belief_agent_ability": user_belief_agent_ability,
+            "belief_honesty": user_belief_honesty,
+        }
+        posterior = query_and_sanitize_user_posterior_response(
+            cfg=cfg,
+            reported_confidence=agent_confidence,
+            agent_correct=agent_correct,
+            prior_beliefs=prior_beliefs,
+            history=history,
+        )
+        if posterior.belief_agent_ability is not None:
+            posterior_user_belief_agent_ability = posterior.belief_agent_ability
+        if posterior.belief_honesty is not None:
+            posterior_user_belief_honesty = posterior.belief_honesty
+        round_updates["posterior_user_belief_agent_ability"] = (
+            posterior_user_belief_agent_ability
+        )
+        round_updates["posterior_user_belief_honesty"] = posterior_user_belief_honesty
+
+    if posterior_user_belief_honesty is not None:
+        updated_h = posterior_user_belief_honesty
+    if posterior_user_belief_agent_ability is not None:
+        updated_mu = posterior_user_belief_agent_ability
+
+    if user_payoff is None or agent_payoff is None:
+        return round_updates, None, updated_h, updated_mu
+
+    round_updates["user_payoff"] = user_payoff
+    round_updates["agent_payoff"] = agent_payoff
+    history_entry: HistoryEntry = {
+        "round": round_idx,
+        "reported_confidence": agent_confidence,
+        "user_decision": user_decision,
+        "was_correct": agent_correct,
+        "user_payoff": user_payoff,
+        "agent_payoff": agent_payoff,
+    }
+    return round_updates, history_entry, updated_h, updated_mu
 
 
 def run_one_trial(
-    cfg: TwoPlayerConfig,
+    cfg: BaseGameConfig,
     dataset: datasets.Dataset,
     trial_idx: int,
     progress: Optional[tqdm] = None,
 ) -> Dict[str, Any]:
-    """
-    Run a single trial of the two-player game.
+    """Run one two-player trial over `cfg.num_rounds`.
 
-    Each trial consists of multiple rounds where:
-    1. A question is sampled (model LLM sees it, user LLM does not)
-    2. Baseline query is made (no game context)
-    3. Model LLM provides answer and confidence (with game context and history)
-    4. User LLM sees only confidence and history, decides to purchase or ignore
-    5. Payoffs are computed and revealed
-    6. History is updated for next round
-
-    Args:
-        cfg: Game configuration
-        dataset: The dataset to sample questions from
-        trial_idx: Index of this trial
-        progress: Optional progress bar
-
-    Returns:
-        Dictionary containing trial results
+    Round flow:
+    1. Sample task.
+    2. Query+sanitize baseline.
+    3. Query+sanitize strategic agent response.
+    4. Resolve user decision/posterior/payoffs.
+    5. Record normalized round result and update history/beliefs.
     """
     history: List[HistoryEntry] = []
     round_results: List[RoundResult] = []
     dataset_size = len(dataset)
 
+    h_t = cfg.h_0
+    mu_t = cfg.mu_0
+
     for round_idx in range(cfg.num_rounds):
-        # Sample a random question
         sample_idx = random.randint(0, dataset_size - 1)
         sample = dataset[sample_idx]
-        question_data: QuestionData = extract_question_from_dataset(sample)
-        question = question_data["question"]
-        correct_answer = question_data["correct_answer"]
-        difficulty = question_data["difficulty"]
+        task_data = extract_task_from_dataset(sample)
+        agent_history = _build_agent_history(history)
+        prior_h = h_t
+        prior_mu = mu_t
 
-        # Build model's history (model knows its own correctness, and user's decision)
-        model_history: List[HistoryEntry] = [
-            {
-                "round": h["round"],
-                "reported_confidence": h["reported_confidence"],
-                "was_correct": h["was_correct"],
-                "user_decision": h["user_decision"],
-                "model_payoff": h["model_payoff"],
-            }
-            for h in history
-        ]
+        baseline_response = query_and_sanitize_baseline_response(
+            cfg, task_data["task"], task_data["correct_solution"]
+        )
+        baseline_solution = baseline_response.solution
+        baseline_confidence = baseline_response.confidence
+        baseline_correct = baseline_response.correct
 
-        # --- Baseline query (no game context) ---
-        try:
-            baseline_response = ask_baseline(
-                model_name=cfg.model_llm_name,
-                question=question,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.baseline_template_path,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-            )
-            baseline_answer = baseline_response.answer
-            baseline_confidence = baseline_response.confidence
-            baseline_correct = evaluate_answer(baseline_answer, correct_answer)
-        except Exception as e:
-            logger.error(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            print(
-                f"Error in baseline query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            baseline_answer = None
-            baseline_confidence = None
-            baseline_correct = None
-
-        # --- Model LLM's turn (with game context) ---
-        try:
-            model_response = ask_with_game_context(
-                model_name=cfg.model_llm_name,
-                question=question,
-                confidence_mode=cfg.confidence_mode,
-                template_path=cfg.game_template_path,
-                reward=cfg.reward,
-                cost=cfg.cost,
-                discount_factor=cfg.discount_factor,
-                threshold=cfg.compute_threshold(),
-                history=model_history,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-            )
-            model_answer = model_response.answer
-            model_confidence = model_response.confidence
-            model_correct = evaluate_answer(model_answer, correct_answer)
-        except Exception as e:
-            logger.error(
-                f"Error in model LLM query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            print(
-                f"Error in model LLM query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            model_answer = None
-            model_confidence = None
-            model_correct = None
-
-        # Skip round if model failed
-        if model_confidence is None:
-            if progress:
-                progress.update(1)
-            continue
-
-        # --- User LLM's turn ---
-        try:
-            user_response = ask_user_llm(cfg, model_confidence, history)
-            user_decision = user_response.decision.upper()
-            user_reasoning = user_response.reasoning
-            user_belief = user_response.belief_ai_correct
-
-            # Normalize decision
-            if user_decision not in ["PURCHASE", "IGNORE"]:
-                if "PURCHASE" in user_decision:
-                    user_decision = "PURCHASE"
-                else:
-                    user_decision = "IGNORE"
-        except Exception as e:
-            logger.error(
-                f"Error in user LLM query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            print(
-                f"Error in user LLM query (trial {trial_idx}, round {round_idx}): {e}"
-            )
-            user_decision = None
-            user_reasoning = None
-            user_belief = None
-
-        # Skip round if user failed
-        if user_decision is None:
-            if progress:
-                progress.update(1)
-            continue
-
-        # --- Compute payoffs ---
-        payoffs = compute_payoffs(user_decision, model_correct, cfg.reward, cfg.cost)
-
-        # --- Compute confidence difference ---
-        confidence_diff = None
-        if baseline_confidence is not None and model_confidence is not None:
-            confidence_diff = model_confidence - baseline_confidence
-
-        # --- Record round results ---
-        round_result: RoundResult = {
-            "round": round_idx,
+        agent_response = query_and_sanitize_agent_game_response(
+            cfg, task_data["task"], task_data["correct_solution"], history=agent_history
+        )
+        agent_solution = agent_response.solution
+        agent_confidence = agent_response.confidence
+        agent_reasoning = agent_response.reasoning
+        agent_correct = agent_response.correct
+        confidence_diff = compute_confidence_diff(baseline_confidence, agent_confidence)
+        round_data: Dict[str, Any] = {
+            "round_idx": round_idx,
             "sample_idx": sample_idx,
-            "difficulty": difficulty,
-            "correct_answer": correct_answer,
-            # Baseline results (no game context)
-            "baseline_answer": baseline_answer,
+            "task": task_data["task"],
+            "difficulty": task_data["difficulty"],
+            "correct_solution": task_data["correct_solution"],
+            "baseline_solution": baseline_solution,
             "baseline_confidence": baseline_confidence,
             "baseline_correct": baseline_correct,
-            # Model LLM results with game context
-            "model_answer": model_answer,
-            "model_confidence": model_confidence,
-            "model_correct": model_correct,
-            # Confidence comparison
+            "agent_solution": agent_solution,
+            "agent_confidence": agent_confidence,
+            "agent_correct": agent_correct,
+            "agent_reasoning": agent_reasoning,
             "confidence_diff": confidence_diff,
-            # User LLM results
-            "user_decision": user_decision,
-            "user_reasoning": user_reasoning,
-            "user_belief": user_belief,
-            # Payoffs
-            "user_payoff": payoffs["user_payoff"],
-            "model_payoff": payoffs["model_payoff"],
+            "prior_agent_honesty": prior_h,
+            "prior_agent_ability": prior_mu,
         }
-        round_results.append(round_result)
 
-        # --- Update history (shared by both user and model LLMs) ---
-        history_entry: HistoryEntry = {
-            "round": round_idx,
-            "reported_confidence": model_confidence,
-            "user_decision": user_decision,
-            "was_correct": model_correct,
-            "user_payoff": payoffs["user_payoff"],
-            "model_payoff": payoffs["model_payoff"],
-        }
-        history.append(history_entry)
+        user_updates, history_entry, h_t, mu_t = _resolve_user_interaction(
+            cfg=cfg,
+            trial_idx=trial_idx,
+            round_idx=round_idx,
+            history=history,
+            prior_h=prior_h,
+            prior_mu=prior_mu,
+            agent_confidence=agent_confidence,
+            agent_correct=agent_correct,
+            agent_response_valid=agent_response.is_valid,
+        )
+        round_data.update(user_updates)
+        if history_entry is not None:
+            history.append(history_entry)
 
+        round_results.append(build_round_result(**round_data))
         if progress:
             progress.update(1)
 
-    # --- Compute trial statistics ---
     trial_stats = compute_trial_statistics(round_results, cfg)
 
     return {
@@ -373,143 +293,154 @@ def run_one_trial(
 
 
 def compute_trial_statistics(
-    round_results: List[RoundResult], cfg: TwoPlayerConfig
+    round_results: List[RoundResult], cfg: BaseGameConfig
 ) -> TrialStatistics:
-    """
-    Compute summary statistics for a single trial.
-
-    Args:
-        round_results: List of round results from run_one_trial
-        cfg: Game configuration
-
-    Returns:
-        Dictionary with summary statistics
-    """
+    """Compute summary statistics for a single trial."""
     if not round_results:
-        return {"error": "No valid rounds in trial"}
+        return {"error": "No valid rounds in trial"}  # type: ignore[return-value]
 
     threshold = cfg.compute_threshold()
 
-    # Get component statistics
     baseline_stats = compute_baseline_stats(round_results)
-    model_stats = compute_model_stats(round_results, threshold)
+    agent_stats = compute_agent_stats(round_results, threshold)
     comparison_stats = compute_confidence_comparison_stats(round_results)
 
-    # User statistics
-    purchase_count = sum(
-        1 for r in round_results if r.get("user_decision") == "PURCHASE"
+    delegation_count = sum(
+        1 for record in round_results if record.get("user_decision") == "DELEGATE"
     )
-    ignore_count = len(round_results) - purchase_count
-    purchase_rate = purchase_count / len(round_results)
+    self_solve_count = len(round_results) - delegation_count
+    delegation_rate = delegation_count / len(round_results) if round_results else 0.0
 
-    # User belief accuracy
     user_beliefs = [
-        r["user_belief"] for r in round_results if r.get("user_belief") is not None
+        record["user_belief_agent_correct"]
+        for record in round_results
+        if record.get("user_belief_agent_correct") is not None
+    ]
+    user_beliefs_agent_ability = [
+        record["user_belief_agent_ability"]
+        for record in round_results
+        if record.get("user_belief_agent_ability") is not None
+    ]
+    user_beliefs_honesty = [
+        record["user_belief_honesty"]
+        for record in round_results
+        if record.get("user_belief_honesty") is not None
     ]
     mean_user_belief = compute_mean(user_beliefs)
-    model_accuracy = model_stats.get("model_accuracy", 0)
+    mean_user_belief_agent_ability = compute_mean(user_beliefs_agent_ability)
+    mean_user_belief_honesty = compute_mean(user_beliefs_honesty)
+    agent_accuracy = agent_stats.get("agent_accuracy")
     belief_error = (
-        abs(mean_user_belief - model_accuracy) if mean_user_belief is not None else None
+        abs(mean_user_belief - agent_accuracy)
+        if mean_user_belief is not None and agent_accuracy is not None
+        else None
     )
 
-    # Payoff statistics
-    total_user_payoff = sum(r.get("user_payoff", 0) for r in round_results)
-    total_model_payoff = sum(r.get("model_payoff", 0) for r in round_results)
-    mean_user_payoff = total_user_payoff / len(round_results)
-    mean_model_payoff = total_model_payoff / len(round_results)
+    total_user_payoff = sum(
+        normalize_finite_float(record.get("user_payoff")) or 0.0
+        for record in round_results
+    )
+    total_agent_payoff = sum(
+        normalize_finite_float(record.get("agent_payoff")) or 0.0
+        for record in round_results
+    )
+    mean_user_payoff = total_user_payoff / len(round_results) if round_results else 0.0
+    mean_agent_payoff = (
+        total_agent_payoff / len(round_results) if round_results else 0.0
+    )
 
-    # Combine all statistics
     stats: TrialStatistics = {
         "num_rounds": len(round_results),
         **baseline_stats,
-        **model_stats,
+        **agent_stats,
         **comparison_stats,
-        # User behavior
-        "purchase_count": purchase_count,
-        "ignore_count": ignore_count,
-        "purchase_rate": purchase_rate,
-        "mean_user_belief": mean_user_belief,
+        "delegation_count": delegation_count,
+        "self_solve_count": self_solve_count,
+        "delegation_rate": delegation_rate,
+        "mean_user_belief_agent_correct": mean_user_belief,
+        "mean_user_belief_agent_ability": mean_user_belief_agent_ability,
+        "mean_user_belief_honesty": mean_user_belief_honesty,
+        "mean_posterior_user_belief_agent_ability": compute_mean(
+            [
+                r["posterior_user_belief_agent_ability"]
+                for r in round_results
+                if r.get("posterior_user_belief_agent_ability") is not None
+            ]
+        ),
+        "mean_posterior_user_belief_honesty": compute_mean(
+            [
+                r["posterior_user_belief_honesty"]
+                for r in round_results
+                if r.get("posterior_user_belief_honesty") is not None
+            ]
+        ),
         "user_belief_error": belief_error,
-        # Payoffs
         "total_user_payoff": total_user_payoff,
-        "total_model_payoff": total_model_payoff,
+        "total_agent_payoff": total_agent_payoff,
         "mean_user_payoff": mean_user_payoff,
-        "mean_model_payoff": mean_model_payoff,
+        "mean_agent_payoff": mean_agent_payoff,
     }
 
     return stats
 
 
-def run_trials(cfg: TwoPlayerConfig) -> Dict[str, Any]:
-    """
-    Run multiple trials of the two-player experiment and save results.
-
-    This function:
-    1. Loads the dataset
-    2. Runs multiple trials, each consisting of multiple rounds
-    3. Computes statistics for each trial and overall
-    4. Saves results and metadata to the output directory
-
-    Args:
-        cfg: Game configuration
-
-    Returns:
-        Dictionary with all results and statistics
-    """
-    # Set random seed for reproducibility
+def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
+    """Run multiple two-player trials, save artifacts, and return full results."""
     random.seed(cfg.seed)
-    logger.info(f"Starting two-player experiment with seed {cfg.seed}")
+    logger.info("Starting two-player experiment with seed %s", cfg.seed)
 
-    # Create output directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_path = (
         Path(__file__).parent.parent.parent
         / Path(cfg.output_dir)
+        / "trials"
         / f"two_player_{timestamp}"
     )
     output_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Output directory: {output_path}")
+    logger.info("Output directory: %s", output_path)
 
-    # Load dataset
-    print(f"Loading dataset: {cfg.dataset_name}")
-    logger.info(f"Loading dataset: {cfg.dataset_name}")
+    logger.info("Loading dataset: %s", cfg.dataset_name)
     dataset = datasets.load_dataset(cfg.dataset_name, split="test")
-    print(f"Dataset loaded with {len(dataset)} samples")
-    logger.info(f"Dataset loaded with {len(dataset)} samples")
+    logger.info("Dataset loaded with %s samples", len(dataset))
 
-    # Print game parameters
     print("\n" + "=" * 70)
-    print("Two-Player Strategic Uncertainty Game")
+    print("Two-Player Strategic Delegation Game")
     print("=" * 70)
-    print(f"\nModel LLM: {cfg.model_llm_name}")
-    print(f"User LLM: {cfg.user_llm_name}")
-    print("\nGame Parameters:")
+    print(f"\nAgent model: {cfg.agent_model_name}")
+    print(f"User model: {cfg.user_model_name}")
+    print("\nInteraction Parameters:")
     print(f"  Reward (r): {cfg.reward}")
-    print(f"  Cost (c): {cfg.cost}")
+    print(f"  Delegation cost (c): {cfg.cost}")
+    print(f"  Effort (e): {cfg.effort}")
     print(f"  Discount factor (δ): {cfg.discount_factor}")
-    print(f"  User purchasing threshold (θ*): {cfg.compute_threshold():.4f}")
+    print(f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}")
     print(f"  Confidence mode: {cfg.confidence_mode.value}")
-    print(f"\nExperiment: {cfg.num_trials} trials × {cfg.num_rounds} rounds")
-    print()
+    print(f"\nExperiment: {cfg.num_trials} trials × {cfg.num_rounds} rounds\n")
 
-    # Run trials
-    all_trial_results = []
-    progress = tqdm(
-        total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game"
-    )
+    all_trial_results: List[Dict[str, Any]] = []
+    _progress_local = None
+    if progress is None:
+        _progress_local = tqdm(
+            total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game"
+        )
+        progress = _progress_local
 
     for trial_idx in range(cfg.num_trials):
-        logger.debug(f"Starting trial {trial_idx}")
+        logger.debug("Starting trial %s", trial_idx)
         trial_result = run_one_trial(cfg, dataset, trial_idx, progress)
         all_trial_results.append(trial_result)
 
-    progress.close()
+    if _progress_local is not None:
+        _progress_local.close()
 
-    # Compute overall statistics
     valid_trials = [
-        t for t in all_trial_results if "error" not in t.get("statistics", {})
+        trial
+        for trial in all_trial_results
+        if "error" not in trial.get("statistics", {})
     ]
-    logger.info(f"Completed {len(valid_trials)} valid trials out of {cfg.num_trials}")
+    logger.info(
+        "Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials
+    )
 
     if valid_trials:
         overall_stats = compute_overall_statistics(valid_trials)
@@ -517,12 +448,11 @@ def run_trials(cfg: TwoPlayerConfig) -> Dict[str, Any]:
         overall_stats = {"error": "No valid trials completed"}
         logger.warning("No valid trials completed")
 
-    # Prepare final results
     results = {
         "timestamp": timestamp,
         "config": {
-            "model_llm_name": cfg.model_llm_name,
-            "user_llm_name": cfg.user_llm_name,
+            "agent_model_name": cfg.agent_model_name,
+            "user_model_name": cfg.user_model_name,
             "dataset_name": cfg.dataset_name,
             "num_trials": cfg.num_trials,
             "num_rounds": cfg.num_rounds,
@@ -538,54 +468,136 @@ def run_trials(cfg: TwoPlayerConfig) -> Dict[str, Any]:
         "trial_results": all_trial_results,
     }
 
-    # Save results
-    with open(output_path / "results.json", "w") as f:
-        json.dump(results, f, indent=2, default=str)
+    with open(
+        output_path / f"results_{timestamp}.json", "w", encoding="utf-8"
+    ) as handle:
+        json.dump(results, handle, indent=2, default=str)
 
-    # Generate and save summary report
     summary = generate_summary_report(cfg, timestamp, overall_stats)
-    with open(output_path / "summary.txt", "w") as f:
-        f.write(summary)
+    with open(
+        output_path / f"summary_{timestamp}.txt", "w", encoding="utf-8"
+    ) as handle:
+        handle.write(summary)
 
     print(summary)
     print(f"\nResults saved to: {output_path}")
-    logger.info(f"Results saved to: {output_path}")
+    logger.info("Results saved to: %s", output_path)
 
     return results
 
 
 def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Compute overall statistics aggregated across all valid trials.
-
-    Args:
-        valid_trials: List of valid trial results
-
-    Returns:
-        Dictionary with overall statistics
-    """
-    # Aggregate statistics
+    """Aggregate cross-trial metrics, including per-round summaries."""
     baseline_accuracies = aggregate_trial_stats(valid_trials, "baseline_accuracy")
     baseline_confidences = aggregate_trial_stats(
         valid_trials, "mean_baseline_confidence"
     )
-    model_accuracies = aggregate_trial_stats(valid_trials, "model_accuracy")
-    model_confidences = aggregate_trial_stats(valid_trials, "mean_model_confidence")
+    agent_accuracies = aggregate_trial_stats(valid_trials, "agent_accuracy")
+    agent_confidences = aggregate_trial_stats(valid_trials, "mean_agent_confidence")
     confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
-    purchase_rates = aggregate_trial_stats(valid_trials, "purchase_rate")
-    user_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief")
+    delegation_rates = aggregate_trial_stats(valid_trials, "delegation_rate")
+    user_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief_agent_correct")
+    user_beliefs_agent_ability = aggregate_trial_stats(
+        valid_trials, "mean_user_belief_agent_ability"
+    )
+    user_beliefs_honesty = aggregate_trial_stats(
+        valid_trials, "mean_user_belief_honesty"
+    )
+    posterior_user_beliefs_agent_ability = aggregate_trial_stats(
+        valid_trials, "mean_posterior_user_belief_agent_ability"
+    )
+    posterior_user_beliefs_honesty = aggregate_trial_stats(
+        valid_trials, "mean_posterior_user_belief_honesty"
+    )
     belief_errors = aggregate_trial_stats(valid_trials, "user_belief_error")
+
+    # Per-round aggregated statistics across trials
+    per_round_stats: Dict[int, Dict[str, Optional[float]]] = {}
+    max_rounds = max((len(t["round_results"]) for t in valid_trials), default=0)
+    for r in range(max_rounds):
+        rounds = [
+            t["round_results"][r] for t in valid_trials if len(t["round_results"]) > r
+        ]
+        if not rounds:
+            continue
+
+        def to_float_bool(v: Optional[bool]) -> Optional[float]:
+            if v is None:
+                return None
+            return 1.0 if bool(v) else 0.0
+
+        baseline_acc_vals = [
+            to_float_bool(rnd.get("baseline_correct"))
+            for rnd in rounds
+            if rnd.get("baseline_correct") is not None
+        ]
+        baseline_conf_vals = [
+            rnd.get("baseline_confidence")
+            for rnd in rounds
+            if rnd.get("baseline_confidence") is not None
+        ]
+        agent_acc_vals = [
+            to_float_bool(rnd.get("agent_correct"))
+            for rnd in rounds
+            if rnd.get("agent_correct") is not None
+        ]
+        agent_conf_vals = [
+            rnd.get("agent_confidence")
+            for rnd in rounds
+            if rnd.get("agent_confidence") is not None
+        ]
+        conf_diff_vals = [
+            rnd.get("confidence_diff")
+            for rnd in rounds
+            if rnd.get("confidence_diff") is not None
+        ]
+        delegation_vals = [
+            1.0 if rnd.get("user_decision") == "DELEGATE" else 0.0
+            for rnd in rounds
+            if rnd.get("user_decision") in {"DELEGATE", "SELF_SOLVE"}
+        ]
+        belief_vals = [
+            rnd.get("user_belief_agent_correct")
+            for rnd in rounds
+            if rnd.get("user_belief_agent_correct") is not None
+        ]
+        user_payoff_vals = [
+            rnd.get("user_payoff")
+            for rnd in rounds
+            if rnd.get("user_payoff") is not None
+        ]
+        agent_payoff_vals = [
+            rnd.get("agent_payoff")
+            for rnd in rounds
+            if rnd.get("agent_payoff") is not None
+        ]
+
+        # Count confidence change categories by round
+        inflated_count = sum(1 for v in conf_diff_vals if v is not None and v > 0)
+        deflated_count = sum(1 for v in conf_diff_vals if v is not None and v < 0)
+        unchanged_count = sum(1 for v in conf_diff_vals if v is not None and v == 0)
+        per_round_stats[r] = {
+            "baseline_accuracy": compute_mean(baseline_acc_vals),
+            "baseline_confidence": compute_mean(baseline_conf_vals),
+            "agent_accuracy": compute_mean(agent_acc_vals),
+            "agent_confidence": compute_mean(agent_conf_vals),
+            "confidence_diff": compute_mean(conf_diff_vals),
+            "delegation_rate": compute_mean(delegation_vals),
+            "user_belief_agent_correct": compute_mean(belief_vals),
+            "mean_user_payoff": compute_mean(user_payoff_vals),
+            "mean_agent_payoff": compute_mean(agent_payoff_vals),
+            "confidence_inflated_count": float(inflated_count),
+            "confidence_deflated_count": float(deflated_count),
+            "confidence_unchanged_count": float(unchanged_count),
+        }
 
     return {
         "num_trials": len(valid_trials),
-        "total_rounds": sum(t["num_rounds_completed"] for t in valid_trials),
-        # Baseline
+        "total_rounds": sum(trial["num_rounds_completed"] for trial in valid_trials),
         "mean_baseline_accuracy": compute_mean(baseline_accuracies),
         "mean_baseline_confidence": compute_mean(baseline_confidences),
-        # Model (game context)
-        "mean_model_accuracy": compute_mean(model_accuracies),
-        "mean_model_confidence": compute_mean(model_confidences),
-        # Confidence comparison
+        "mean_agent_accuracy": compute_mean(agent_accuracies),
+        "mean_agent_confidence": compute_mean(agent_confidences),
         "mean_confidence_diff": compute_mean(confidence_diffs),
         "total_confidence_inflated": sum_trial_stats(
             valid_trials, "confidence_inflated_count"
@@ -596,60 +608,62 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
         "total_confidence_unchanged": sum_trial_stats(
             valid_trials, "confidence_unchanged_count"
         ),
-        # User behavior
-        "mean_purchase_rate": compute_mean(purchase_rates),
-        "mean_user_belief": compute_mean(user_beliefs),
+        "mean_delegation_rate": compute_mean(delegation_rates),
+        "mean_user_belief_agent_correct": compute_mean(user_beliefs),
+        "mean_user_belief_agent_ability": compute_mean(user_beliefs_agent_ability),
+        "mean_user_belief_honesty": compute_mean(user_beliefs_honesty),
+        "mean_posterior_user_belief_agent_ability": compute_mean(
+            posterior_user_beliefs_agent_ability
+        ),
+        "mean_posterior_user_belief_honesty": compute_mean(
+            posterior_user_beliefs_honesty
+        ),
         "mean_user_belief_error": compute_mean(belief_errors),
-        # Payoffs
         "total_user_payoff": sum_trial_stats(valid_trials, "total_user_payoff"),
-        "total_model_payoff": sum_trial_stats(valid_trials, "total_model_payoff"),
+        "total_agent_payoff": sum_trial_stats(valid_trials, "total_agent_payoff"),
         "mean_user_payoff_per_round": compute_mean(
             aggregate_trial_stats(valid_trials, "mean_user_payoff")
         ),
-        "mean_model_payoff_per_round": compute_mean(
-            aggregate_trial_stats(valid_trials, "mean_model_payoff")
+        "mean_agent_payoff_per_round": compute_mean(
+            aggregate_trial_stats(valid_trials, "mean_agent_payoff")
         ),
+        "per_round_statistics": per_round_stats,
     }
 
 
 def generate_summary_report(
-    cfg: TwoPlayerConfig, timestamp: str, overall_stats: Dict[str, Any]
+    cfg: BaseGameConfig,
+    timestamp: str,
+    overall_stats: Dict[str, Any],
 ) -> str:
-    """
-    Generate a human-readable summary report.
-
-    Args:
-        cfg: Game configuration
-        timestamp: Experiment timestamp
-        overall_stats: Overall statistics dictionary
-
-    Returns:
-        Formatted summary string
-    """
+    """Generate a human-readable summary report."""
     lines = [
         "=" * 70,
-        "Two-Player Strategic Uncertainty Game Results",
+        "Two-Player Strategic Delegation Game Results",
         "=" * 70,
         f"Timestamp: {timestamp}",
-        f"Model LLM: {cfg.model_llm_name}",
-        f"User LLM: {cfg.user_llm_name}",
+        f"Agent model: {cfg.agent_model_name}",
+        f"User model: {cfg.user_model_name}",
         f"Dataset: {cfg.dataset_name}",
         f"Trials: {cfg.num_trials}, Rounds per trial: {cfg.num_rounds}",
         "-" * 70,
-        "Game Parameters:",
+        "Interaction Parameters:",
         f"  Reward (r): {cfg.reward}",
-        f"  Cost (c): {cfg.cost}",
+        f"  Delegation cost (c): {cfg.cost}",
         f"  Discount factor (δ): {cfg.discount_factor}",
-        f"  User purchasing threshold (θ*): {cfg.compute_threshold():.4f}",
+        f"  User delegation threshold (θ*): {cfg.compute_threshold():.4f}",
         f"  Confidence mode: {cfg.confidence_mode.value}",
         "-" * 70,
         "Overall Statistics:",
     ]
 
     if "error" not in overall_stats:
-        # Baseline performance
-        lines.append("")
-        lines.append("Baseline Performance (no game context):")
+        lines.extend(
+            [
+                "",
+                "Baseline Performance (no strategic context):",
+            ]
+        )
         if overall_stats.get("mean_baseline_accuracy") is not None:
             lines.append(
                 f"  Mean accuracy: {overall_stats['mean_baseline_accuracy']:.4f}"
@@ -659,66 +673,147 @@ def generate_summary_report(
                 f"  Mean confidence: {overall_stats['mean_baseline_confidence']:.4f}"
             )
 
-        # Model performance
-        lines.append("")
-        lines.append("Model Performance (with game context):")
-        if overall_stats.get("mean_model_accuracy") is not None:
-            lines.append(f"  Mean accuracy: {overall_stats['mean_model_accuracy']:.4f}")
-        if overall_stats.get("mean_model_confidence") is not None:
+        lines.extend(
+            [
+                "",
+                "Agent Performance (strategic context):",
+            ]
+        )
+        if overall_stats.get("mean_agent_accuracy") is not None:
+            lines.append(f"  Mean accuracy: {overall_stats['mean_agent_accuracy']:.4f}")
+        if overall_stats.get("mean_agent_confidence") is not None:
             lines.append(
-                f"  Mean reported confidence: {overall_stats['mean_model_confidence']:.4f}"
+                f"  Mean reported confidence: {overall_stats['mean_agent_confidence']:.4f}"
             )
 
-        # Confidence comparison
-        lines.append("")
-        lines.append("Confidence Comparison (game - baseline):")
+        lines.extend(
+            [
+                "",
+                "Confidence Comparison (strategic - baseline):",
+            ]
+        )
         if overall_stats.get("mean_confidence_diff") is not None:
             lines.append(
                 f"  Mean difference: {overall_stats['mean_confidence_diff']:.4f}"
             )
         lines.append(
-            f"  Inflated (game > baseline): {overall_stats['total_confidence_inflated']} times"
+            f"  Inflated (strategic > baseline): {overall_stats['total_confidence_inflated']} times"
         )
         lines.append(
-            f"  Deflated (game < baseline): {overall_stats['total_confidence_deflated']} times"
+            f"  Deflated (strategic < baseline): {overall_stats['total_confidence_deflated']} times"
         )
         lines.append(
             f"  Unchanged: {overall_stats['total_confidence_unchanged']} times"
         )
 
-        # User behavior
-        lines.append("")
-        lines.append("User Behavior:")
-        if overall_stats.get("mean_purchase_rate") is not None:
-            lines.append(f"  Purchase rate: {overall_stats['mean_purchase_rate']:.4f}")
-        if overall_stats.get("mean_user_belief") is not None:
+        lines.extend(
+            [
+                "",
+                "User Behaviour:",
+            ]
+        )
+        if overall_stats.get("mean_delegation_rate") is not None:
             lines.append(
-                f"  Mean user belief about AI correctness: {overall_stats['mean_user_belief']:.4f}"
+                f"  Delegation rate: {overall_stats['mean_delegation_rate']:.4f}"
+            )
+        if overall_stats.get("mean_user_belief_agent_correct") is not None:
+            lines.append(
+                f"  Mean belief agent is correct: {overall_stats['mean_user_belief_agent_correct']:.4f}"
             )
         if overall_stats.get("mean_user_belief_error") is not None:
             lines.append(
                 f"  User belief calibration error: {overall_stats['mean_user_belief_error']:.4f}"
             )
 
-        # Payoffs
-        lines.append("")
-        lines.append("Payoffs:")
+        lines.extend(
+            [
+                "",
+                "Payoffs:",
+            ]
+        )
         if overall_stats.get("total_user_payoff") is not None:
             lines.append(
                 f"  Total user payoff: {overall_stats['total_user_payoff']:.2f}"
             )
-        if overall_stats.get("total_model_payoff") is not None:
+        if overall_stats.get("total_agent_payoff") is not None:
             lines.append(
-                f"  Total model payoff: {overall_stats['total_model_payoff']:.2f}"
+                f"  Total agent payoff: {overall_stats['total_agent_payoff']:.2f}"
             )
         if overall_stats.get("mean_user_payoff_per_round") is not None:
             lines.append(
                 f"  Mean user payoff per round: {overall_stats['mean_user_payoff_per_round']:.4f}"
             )
-        if overall_stats.get("mean_model_payoff_per_round") is not None:
+        if overall_stats.get("mean_agent_payoff_per_round") is not None:
             lines.append(
-                f"  Mean model payoff per round: {overall_stats['mean_model_payoff_per_round']:.4f}"
+                f"  Mean agent payoff per round: {overall_stats['mean_agent_payoff_per_round']:.4f}"
             )
+
+        # Per-round statistics section
+        per_round = overall_stats.get("per_round_statistics") or {}
+        if per_round:
+            lines.extend(["", "Per-Round Statistics:"])
+            for r in sorted(per_round.keys()):
+                rs = per_round[r]
+                lines.append(f"  Round {r}:")
+                if (
+                    rs.get("baseline_accuracy") is not None
+                    and rs.get("baseline_confidence") is not None
+                ):
+                    lines.append(
+                        f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}, confidence: {rs['baseline_confidence']:.4f}"
+                    )
+                elif rs.get("baseline_accuracy") is not None:
+                    lines.append(
+                        f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}"
+                    )
+                elif rs.get("baseline_confidence") is not None:
+                    lines.append(
+                        f"    Baseline - confidence: {rs['baseline_confidence']:.4f}"
+                    )
+
+                if (
+                    rs.get("agent_accuracy") is not None
+                    and rs.get("agent_confidence") is not None
+                ):
+                    lines.append(
+                        f"    Agent - accuracy: {rs['agent_accuracy']:.4f}, reported confidence: {rs['agent_confidence']:.4f}"
+                    )
+                elif rs.get("agent_accuracy") is not None:
+                    lines.append(f"    Agent - accuracy: {rs['agent_accuracy']:.4f}")
+                elif rs.get("agent_confidence") is not None:
+                    lines.append(
+                        f"    Agent - reported confidence: {rs['agent_confidence']:.4f}"
+                    )
+
+                if rs.get("confidence_diff") is not None:
+                    lines.append(
+                        f"    Confidence diff (strategic - baseline): {rs['confidence_diff']:.4f}"
+                    )
+                # Per-round confidence change counts
+                if rs.get("confidence_inflated_count") is not None:
+                    lines.append(
+                        f"    Confidence inflated rounds: {int(rs['confidence_inflated_count'])}"
+                    )
+                if rs.get("confidence_deflated_count") is not None:
+                    lines.append(
+                        f"    Confidence deflated rounds: {int(rs['confidence_deflated_count'])}"
+                    )
+                if rs.get("confidence_unchanged_count") is not None:
+                    lines.append(
+                        f"    Confidence unchanged rounds: {int(rs['confidence_unchanged_count'])}"
+                    )
+                if rs.get("delegation_rate") is not None:
+                    lines.append(f"    Delegation rate: {rs['delegation_rate']:.4f}")
+                if rs.get("user_belief_agent_correct") is not None:
+                    lines.append(
+                        f"    Mean user belief agent is correct: {rs['user_belief_agent_correct']:.4f}"
+                    )
+                if rs.get("mean_user_payoff") is not None:
+                    lines.append(f"    Mean user payoff: {rs['mean_user_payoff']:.4f}")
+                if rs.get("mean_agent_payoff") is not None:
+                    lines.append(
+                        f"    Mean agent payoff: {rs['mean_agent_payoff']:.4f}"
+                    )
     else:
         lines.append(f"  Error: {overall_stats['error']}")
 
@@ -726,13 +821,126 @@ def generate_summary_report(
     return "\n".join(lines)
 
 
+def run_experiments(
+    configs: List[BaseGameConfig], output_path: Path | str
+) -> pd.DataFrame:
+    """
+    Run experiments for multiple configurations and export the results.
+
+    Saves two files in the output_path directory:
+    - results.csv: Contains all per-round rows, with constant fields removed.
+    - config.json: Contains all fields that were constant across every row.
+
+    Returns:
+        pandas.DataFrame containing all per-round rows.
+    """
+
+    # Prepare rows buffer
+    rows_buffer: List[Dict[str, Any]] = []
+
+    # Create a tqdm progress bar across all configs and trials/rounds
+    total_steps = sum(c.num_trials * c.num_rounds for c in configs)
+    sweep_progress = tqdm(total=total_steps, desc="Config sweep progress")
+
+    for cfg in configs:
+        # Run the full experiment for this config, passing the shared progress bar
+        results = run_trials(cfg, progress=sweep_progress)
+
+        timestamp = results.get("timestamp")
+        config = results.get("config", {}) or {}
+        trials = results.get("trial_results", []) or []
+
+        for trial in trials:
+            trial_idx = trial.get("trial_idx")
+            num_rounds_completed = trial.get("num_rounds_completed")
+            round_results = trial.get("round_results", []) or []
+
+            for rr in round_results:
+                row: Dict[str, Any] = {**config}
+                row["timestamp"] = timestamp
+                row["trial_idx"] = trial_idx
+                row["num_rounds_completed"] = num_rounds_completed
+                # Include all round result fields verbatim
+                row.update(rr or {})
+                if "task" in row:
+                    del row["task"]
+                rows_buffer.append(row)
+
+    # Close progress bar
+    sweep_progress.close()
+
+    if not rows_buffer:
+        return pd.DataFrame()
+
+    # Create DataFrame
+    df = pd.DataFrame(rows_buffer)
+
+    # Identify constant columns
+    constant_config = {}
+    constant_cols = []
+    for col in df.columns:
+        if df[col].nunique(dropna=False) <= 1:
+            val = df[col].iloc[0] if not df.empty else None
+            constant_config[col] = val
+            constant_cols.append(col)
+
+    # Drop constant columns from DataFrame
+    df_trimmed = df.drop(columns=constant_cols)
+
+    # Ensure output directory exists
+    output_dir = Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+    # Write constant config to json
+    with open(output_dir / f"config_{timestamp}.json", "w") as f:
+        json.dump(constant_config, f, indent=4, default=str)
+
+    # Write trimmed DataFrame to CSV
+    df_trimmed.to_csv(output_dir / f"results_{timestamp}.csv", index=False)
+
+    # Return the full DataFrame (or df_trimmed based on preference,
+    # but the request implies returning the dataframe after processing)
+    return df_trimmed
+
+
 if __name__ == "__main__":
-    # Default configuration for testing
-    config = TwoPlayerConfig(
-        model_llm_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        user_llm_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        num_trials=1,
-        num_rounds=5,
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
-    results = run_trials(config)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    output_filename = (
+        Path(__file__).parent.parent.parent
+        / "outputs"
+        / "experiments"
+        / f"sweep_two_player_{timestamp}"
+    )
+    deltas = [
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        0.9,
+    ]  # [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]
+    h_s = [0.1, 0.3, 0.5, 0.7, 0.9]  # [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    mu_s = [0.1, 0.3, 0.5, 0.7, 0.9]  # [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+    sweep_configs = [
+        BaseGameConfig(
+            # model_name="together_ai/openai/gpt-oss-20b",
+            num_trials=1,
+            num_rounds=2,
+            discount_factor=delta,
+            priors=True,
+            h_0=h,
+            mu_0=mu,
+            seed=int(time.time()),
+        )
+        for delta in deltas
+        for h in h_s
+        for mu in mu_s
+    ]
+    # print(len(sweep_configs))
+    run_experiments(sweep_configs, output_filename)

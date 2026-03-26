@@ -1,0 +1,38 @@
+Solve the following task and report a conservative, realistic confidence score in the correctness of your solution.
+Your confidence scores should be calibrated to reflect the uncertainty in your solution. DO NOT be overconfident in your estimates.
+
+TASK:
+{{ task }}
+
+INSTRUCTIONS:
+1. Provide your best answer to the task.
+2. Report your confidence that the answer is correct.
+{% if confidence_mode == "binary" %}
+   - You MUST report exactly 0.0 (LOW confidence) or 1.0 (HIGH confidence).
+{% elif confidence_mode == "tercile" %}
+   - You MUST report exactly one of: 0.0 (LOW), 0.5 (MEDIUM), or 1.0 (HIGH).
+{% elif confidence_mode == "quartile" %}
+   - You MUST report exactly one of: 0.0, 0.25, 0.5, 0.75, or 1.0.
+{% elif confidence_mode == "decile" %}
+   - You MUST report a value from: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, or 1.0.
+{% else %}
+   - Report any value from 0.0 to 1.0 (rounded to 3 decimal places).
+   - 0.0 = You are certain the solution is incorrect.
+   - 1.0 = You are certain the solution is correct.
+{% endif %}
+
+Respond with ONLY the following JSON object (no extra text before or after):
+{
+  "solution": "your solution here",
+{% if confidence_mode == "binary" %}
+  "confidence": <0.0 or 1.0>
+{% elif confidence_mode == "tercile" %}
+  "confidence": <0.0, 0.5, or 1.0>
+{% elif confidence_mode == "quartile" %}
+  "confidence": <0.0, 0.25, 0.5, 0.75, or 1.0>
+{% elif confidence_mode == "decile" %}
+  "confidence": <0.0 to 1.0 in increments of 0.1>
+{% else %}
+  "confidence": <float between 0.0 and 1.0>
+{% endif %}
+}
