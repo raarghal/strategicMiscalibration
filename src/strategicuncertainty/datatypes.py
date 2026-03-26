@@ -91,8 +91,8 @@ class TrialStatistics(TypedDict, total=False):
     baseline_accuracy: Optional[float]
     mean_baseline_confidence: Optional[float]
     # Agent stats
-    agent_accuracy: float
-    mean_agent_confidence: float
+    agent_accuracy: Optional[float]
+    mean_agent_confidence: Optional[float]
     high_confidence_count: int
     high_confidence_accuracy: Optional[float]
     low_confidence_count: int
