@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(ENV_FILE)
 
+# Enable JSON schema validation globally for litellm.
+# This is configured at module import time to ensure all LLM requests use JSON schema validation.
+# Note: This affects all litellm usage in the application, not just this module.
 litellm.enable_json_schema_validation = True
 
 
