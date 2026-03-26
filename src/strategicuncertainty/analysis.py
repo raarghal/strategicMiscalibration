@@ -165,7 +165,7 @@ def load_and_prepare_dataframe(datafile: Path) -> pd.DataFrame:
     df = pd.read_csv(datafile)
     # If needed in future:
     # df["round"] = df["round"] + 1
-    df["Delegated"] = (df["user_decision"] == "DELEGATE").astype(int)
+    df["Delegated"] = df["agent_payoff"] / max(df["agent_payoff"])
     return df.round(4)
 
 
