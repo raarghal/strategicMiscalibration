@@ -22,7 +22,6 @@ from tqdm import tqdm
 from .datatypes import (
     BaseGameConfig,
     RoundResult,
-    TaskData,
     TrialStatistics,
 )
 from .utils import (
@@ -42,47 +41,39 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
-def _sample_round_context(
-    dataset: datasets.Dataset, round_idx: int, dataset_size: int
-) -> tuple[int, str, str, str | None]:
-    sample_idx = random.randint(0, dataset_size - 1)
-    sample = dataset[sample_idx]
-    task_data: TaskData = extract_task_from_dataset(sample)
-    return (
-        sample_idx,
-        task_data["task"],
-        task_data["correct_solution"],
-        task_data["difficulty"],
-    )
-
-
-def _run_single_round(
-    cfg: BaseGameConfig,
+def _append_round_result(
+    round_results: List[RoundResult],
+    *,
     round_idx: int,
     sample_idx: int,
     task: str,
+    difficulty: Any,
     correct_solution: str,
-    difficulty: str | None,
-) -> RoundResult:
-    baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
-    agent = query_and_sanitize_agent_game_response(
-        cfg, task, correct_solution, history=None
-    )
-    confidence_diff = compute_confidence_diff(baseline.confidence, agent.confidence)
-
-    return build_round_result(
-        round_idx=round_idx,
-        sample_idx=sample_idx,
-        task=task,
-        difficulty=difficulty,
-        correct_solution=correct_solution,
-        baseline_solution=baseline.solution,
-        baseline_confidence=baseline.confidence,
-        baseline_correct=baseline.correct,
-        agent_solution=agent.solution,
-        agent_confidence=agent.confidence,
-        agent_correct=agent.correct,
-        confidence_diff=confidence_diff,
+    baseline_solution: Any,
+    baseline_confidence: Any,
+    baseline_correct: Any,
+    agent_solution: Any,
+    agent_confidence: Any,
+    agent_correct: Any,
+) -> None:
+    """Append one normalized single-player round record to `round_results`."""
+    round_results.append(
+        build_round_result(
+            round_idx=round_idx,
+            sample_idx=sample_idx,
+            task=task,
+            difficulty=difficulty,
+            correct_solution=correct_solution,
+            baseline_solution=baseline_solution,
+            baseline_confidence=baseline_confidence,
+            baseline_correct=baseline_correct,
+            agent_solution=agent_solution,
+            agent_confidence=agent_confidence,
+            agent_correct=agent_correct,
+            confidence_diff=compute_confidence_diff(
+                baseline_confidence, agent_confidence
+            ),
+        )
     )
 
 
@@ -96,13 +87,13 @@ def run_one_trial(
     Run a single trial of the experiment.
 
     For each round:
-    1. Sample a task from the dataset
-    2. Solve the task without strategic context (baseline)
-    3. Solve the same task with strategic context
-    4. Record both responses and compare confidence scores
+    1. Sample task data.
+    2. Query+sanitize baseline response.
+    3. Query+sanitize strategic response.
+    4. Record normalized round result.
 
-    Note: This single-player version does not simulate actual game dynamics.
-    It only measures whether the strategic framing affects confidence reporting.
+    This mode does not model user interaction; it isolates confidence shifts
+    caused by strategic framing alone.
 
     Args:
         cfg: Game configuration
@@ -117,18 +108,31 @@ def run_one_trial(
     dataset_size = len(dataset)
 
     for round_idx in range(cfg.num_rounds):
-        sample_idx, task, correct_solution, difficulty = _sample_round_context(
-            dataset, round_idx, dataset_size
+        sample_idx = random.randint(0, dataset_size - 1)
+        sample = dataset[sample_idx]
+        task_data = extract_task_from_dataset(sample)
+        task = task_data["task"]
+        correct_solution = task_data["correct_solution"]
+        difficulty = task_data["difficulty"]
+
+        baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
+        agent = query_and_sanitize_agent_game_response(
+            cfg, task, correct_solution, history=None
         )
-        round_result = _run_single_round(
-            cfg,
-            round_idx,
-            sample_idx,
-            task,
-            correct_solution,
-            difficulty,
+        _append_round_result(
+            round_results,
+            round_idx=round_idx,
+            sample_idx=sample_idx,
+            task=task,
+            difficulty=difficulty,
+            correct_solution=correct_solution,
+            baseline_solution=baseline.solution,
+            baseline_confidence=baseline.confidence,
+            baseline_correct=baseline.correct,
+            agent_solution=agent.solution,
+            agent_confidence=agent.confidence,
+            agent_correct=agent.correct,
         )
-        round_results.append(round_result)
         progress.update(1)
 
     # Compute trial statistics
@@ -183,7 +187,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     This function:
     1. Loads the dataset
     2. Runs multiple trials, each consisting of multiple rounds
-    3. Computes statistics for each trial and overall
+    3. Computes per-trial and overall summary statistics
     4. Saves results and metadata to the output directory
 
     Args:

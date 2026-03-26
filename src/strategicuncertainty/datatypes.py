@@ -1,3 +1,11 @@
+"""Shared types and configuration objects for the strategic-uncertainty package.
+
+This module is the canonical home for data contracts used across:
+- game execution (`single_player`, `two_player`)
+- sanitization payloads (`utils`)
+- LLM/query configuration (`llm_interface` integration)
+"""
+
 from __future__ import annotations
 
 import logging
@@ -115,6 +123,8 @@ class TrialStatistics(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class SanitizedBaselineResponse:
+    """Normalized baseline-response payload returned by sanitizer helpers."""
+
     is_valid: bool
     solution: Optional[str]
     confidence: Optional[float]
@@ -123,6 +133,8 @@ class SanitizedBaselineResponse:
 
 @dataclass(frozen=True)
 class SanitizedAgentGameResponse:
+    """Normalized strategic-agent payload returned by sanitizer helpers."""
+
     is_valid: bool
     solution: Optional[str]
     confidence: Optional[float]
@@ -132,6 +144,8 @@ class SanitizedAgentGameResponse:
 
 @dataclass(frozen=True)
 class SanitizedUserDecisionResponse:
+    """Normalized user-decision payload returned by sanitizer helpers."""
+
     is_valid: bool
     decision: Optional[str]
     reasoning: Optional[str]
@@ -142,6 +156,8 @@ class SanitizedUserDecisionResponse:
 
 @dataclass(frozen=True)
 class SanitizedUserPosteriorResponse:
+    """Normalized user-posterior payload returned by sanitizer helpers."""
+
     is_valid: bool
     reasoning: Optional[str]
     belief_agent_correct: Optional[float]

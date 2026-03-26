@@ -2,6 +2,13 @@
 Common utilities, types, and configuration for the strategic delegation experiments.
 
 This module contains shared functionality used by both single_player.py and two_player.py.
+
+Key areas:
+- Dataset extraction and answer evaluation helpers
+- Sanitization/normalization of raw LLM responses
+- Query+sanitize convenience functions (immediate post-query cleaning)
+- Prompted query wrappers for baseline/agent/user interactions
+- Statistics aggregation helpers used by trial runners
 """
 
 from __future__ import annotations
@@ -175,7 +182,7 @@ def build_round_result(
     user_payoff: Optional[float] = None,
     agent_payoff: Optional[float] = None,
 ) -> RoundResult:
-    """Build a normalized round result record for single- and two-player modes."""
+    """Build a normalized round result dict for single- and two-player modes."""
     return {
         "round": round_idx,
         "sample_idx": sample_idx,
@@ -334,7 +341,7 @@ def sanitize_user_posterior_response(
 def query_and_sanitize_baseline_response(
     cfg: BaseGameConfig, task: str, correct_solution: str
 ) -> SanitizedBaselineResponse:
-    """Query baseline LLM and return sanitized response payload."""
+    """Query baseline LLM and immediately return sanitized payload."""
     try:
         response = solve_task_without_game_context(cfg=cfg, task=task)
     except Exception:
@@ -349,7 +356,7 @@ def query_and_sanitize_agent_game_response(
     correct_solution: str,
     history: Optional[List[HistoryEntry]] = None,
 ) -> SanitizedAgentGameResponse:
-    """Query strategic agent LLM and return sanitized response payload."""
+    """Query strategic agent LLM and immediately return sanitized payload."""
     try:
         response = solve_task_with_game_context(cfg=cfg, task=task, history=history)
     except Exception:
@@ -365,7 +372,7 @@ def query_and_sanitize_user_decision_response(
     h_t: Optional[float] = None,
     mu_t: Optional[float] = None,
 ) -> SanitizedUserDecisionResponse:
-    """Query user-decision LLM and return sanitized response payload."""
+    """Query user-decision LLM and immediately return sanitized payload."""
     try:
         response = query_user_delegation(cfg, reported_confidence, history, h_t, mu_t)
     except Exception:
@@ -381,7 +388,7 @@ def query_and_sanitize_user_posterior_response(
     prior_beliefs: Dict[str, Optional[float]],
     history: List[HistoryEntry],
 ) -> SanitizedUserPosteriorResponse:
-    """Query user-posterior LLM and return sanitized response payload."""
+    """Query user-posterior LLM and immediately return sanitized payload."""
     try:
         response = query_user_posterior(
             cfg=cfg,
@@ -687,10 +694,9 @@ def sum_trial_stats(trial_results: List[Dict[str, Any]], stat_key: str) -> float
 
 def load_two_player_results_to_df(results_path: Path | str):
     """
-    Load a two_player results.json file and return a pandas DataFrame
-    where each row corresponds to one round of one trial, merged with config.
+    Load a `two_player` results JSON and flatten it to per-round rows.
 
-    Columns include all keys from the top-level "config" object plus:
+    Output columns include all top-level `config` keys plus:
     - trial_idx
     - num_rounds_completed
     - all fields from each round_results entry (e.g., round, sample_idx, task, etc.)

@@ -1,3 +1,12 @@
+"""LLM interface layer for structured prompting and response parsing.
+
+Responsibilities:
+- Define response schemas used by the LLM calls.
+- Render Jinja prompt templates with runtime values.
+- Send requests through LiteLLM with retries and structured JSON schema output.
+- Return parsed Pydantic payloads plus estimated request cost.
+"""
+
 import logging
 from enum import Enum
 from pathlib import Path
@@ -48,7 +57,7 @@ class AgentBaselineResponse(BaseModel):
 
 
 class AgentGameResponse(BaseModel):
-    """Schema for the agent LLM's solution and confidence response."""
+    """Schema for strategic-agent output (solution, confidence, reasoning)."""
 
     solution: str = Field(description="Agent's proposed solution to the task")
     confidence: float = Field(description="Agent's confidence signal to the user")
@@ -169,7 +178,7 @@ def query_llm(
     temperature: Optional[float] = 0.01,
 ) -> Tuple[BaseModel, float]:
     """
-    Query the LLM with a prompt and parse the JSON response.
+    Query the LLM and parse JSON into the supplied response schema.
 
     Args:
         model: Model name/identifier
@@ -179,7 +188,7 @@ def query_llm(
         temperature: Sampling temperature
 
     Returns:
-        Tuple containing the parsed response and the estimated cost
+        Tuple containing `(parsed_response_model, estimated_cost)`.
     """
     try:
         raw_response, cost = _make_llm_request(
