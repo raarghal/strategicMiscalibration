@@ -153,7 +153,7 @@ def load_and_prepare_dataframe(datafile: Path) -> pd.DataFrame:
     """Load the CSV and apply initial deterministic preprocessing.
 
     Current behavior preserved:
-    - Adds `Delegated = agent_payoff * 10`
+    - Adds `Delegated` as a 0/1 integer column derived from `user_decision == "DELEGATE"`
     - Rounds all numeric values to 4 decimals
 
     Args:
@@ -165,7 +165,8 @@ def load_and_prepare_dataframe(datafile: Path) -> pd.DataFrame:
     df = pd.read_csv(datafile)
     # If needed in future:
     # df["round"] = df["round"] + 1
-    df["Delegated"] = df["agent_payoff"] * 10
+    delegation_map = {"DELEGATE": 1, "SELF_COMPLETE": 0}
+    df["Delegated"] = [delegation_map[decision] for decision in df["user_decision"]]
     return df.round(4)
 
 
