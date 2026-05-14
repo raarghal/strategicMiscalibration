@@ -147,6 +147,7 @@ venv.bak/
 # Outputs
 outputs/
 figures/
+tools/
 
 # Spyder project settings
 .spyderproject

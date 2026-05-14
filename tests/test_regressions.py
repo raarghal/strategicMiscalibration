@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import strategicuncertainty as su
-from strategicuncertainty.two_player import compute_payoffs
-from strategicuncertainty.utils import (
+import strategicmiscalibration as sm
+from strategicmiscalibration.math_qa_game import compute_payoffs
+from strategicmiscalibration.utils import (
     build_round_result,
     compute_confidence_diff,
     evaluate_solution,
@@ -13,14 +13,14 @@ from strategicuncertainty.utils import (
 
 
 def test_package_exports_are_valid_symbols() -> None:
-    assert su.BaseGameConfig is not None
-    assert su.ConfidenceMode is not None
-    assert su.AgentBaselineResponse is not None
-    assert su.AgentGameResponse is not None
-    assert su.UserDecisionResponse is not None
-    assert su.UserPosteriorResponse is not None
-    assert su.extract_task_from_dataset is not None
-    assert su.evaluate_solution is not None
+    assert sm.BaseGameConfig is not None
+    assert sm.ConfidenceMode is not None
+    assert sm.AgentBaselineResponse is not None
+    assert sm.AgentGameResponse is not None
+    assert sm.UserDecisionResponse is not None
+    assert sm.UserPosteriorResponse is not None
+    assert sm.extract_task_from_dataset is not None
+    assert sm.evaluate_solution is not None
 
 
 def test_compute_payoffs_rejects_unknown_delegated_outcome() -> None:

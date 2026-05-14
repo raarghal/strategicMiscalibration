@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from strategicuncertainty.llm_interface import (
+from strategicmiscalibration.llm_interface import (
     AgentBaselineResponse,
     AgentGameResponse,
     UserDecisionResponse,
     UserPosteriorResponse,
 )
-from strategicuncertainty.utils import (
+from strategicmiscalibration.utils import (
     sanitize_agent_game_response,
     sanitize_baseline_response,
     sanitize_user_decision_response,

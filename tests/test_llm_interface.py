@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel, Field
 
-from strategicuncertainty.llm_interface import _make_llm_request, query_llm
+from strategicmiscalibration.llm_interface import _make_llm_request, query_llm
 
 
 class MockResponseModel(BaseModel):

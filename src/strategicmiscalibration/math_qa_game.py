@@ -31,6 +31,7 @@ from .utils import (
     compute_confidence_comparison_stats,
     compute_confidence_diff,
     compute_mean,
+    configure_logging,
     extract_task_from_dataset,
     normalize_finite_float,
     query_and_sanitize_agent_game_response,
@@ -875,40 +876,33 @@ def run_experiments(
     # Create DataFrame
     df = pd.DataFrame(rows_buffer)
 
-    # Identify constant columns
+    # Identify constant columns (for record-keeping) but DO NOT drop them.
+    # Previous behaviour removed constant columns from the CSV which
+    # complicated downstream analysis that expects config values to be
+    # present in the per-row results. Keep the full DataFrame intact.
     constant_config = {}
-    constant_cols = []
     for col in df.columns:
         if df[col].nunique(dropna=False) <= 1:
-            val = df[col].iloc[0] if not df.empty else None
-            constant_config[col] = val
-            constant_cols.append(col)
-
-    # Drop constant columns from DataFrame
-    df_trimmed = df.drop(columns=constant_cols)
+            constant_config[col] = df[col].iloc[0] if not df.empty else None
 
     # Ensure output directory exists
     output_dir = Path(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
-    # Write constant config to json
+    # Write constant config to json for backwards compatibility / quick reference
     with open(output_dir / f"config_{timestamp}.json", "w") as f:
         json.dump(constant_config, f, indent=4, default=str)
 
-    # Write trimmed DataFrame to CSV
-    df_trimmed.to_csv(output_dir / f"results_{timestamp}.csv", index=False)
+    # Write the full DataFrame to CSV (keep constant config columns included)
+    df.to_csv(output_dir / f"results_{timestamp}.csv", index=False)
 
-    # Return the full DataFrame (or df_trimmed based on preference,
-    # but the request implies returning the dataframe after processing)
-    return df_trimmed
+    # Return the full DataFrame (now matching the CSV contents)
+    return df
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    configure_logging()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_filename = (
@@ -919,9 +913,7 @@ if __name__ == "__main__":
     )
     deltas = [
         0.1,
-        0.25,
         0.5,
-        0.75,
         0.9,
     ]  # [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]
     h_s = [0.1, 0.3, 0.5, 0.7, 0.9]  # [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -929,7 +921,8 @@ if __name__ == "__main__":
 
     sweep_configs = [
         BaseGameConfig(
-            # model_name="together_ai/openai/gpt-oss-20b",
+            user_model_name="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",  # "together_ai/openai/gpt-oss-20b",  #
+            agent_model_name="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",  # "together_ai/openai/gpt-oss-20b",  #
             num_trials=1,
             num_rounds=2,
             discount_factor=delta,

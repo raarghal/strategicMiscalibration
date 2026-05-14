@@ -32,6 +32,7 @@ from .utils import (
     compute_confidence_comparison_stats,
     compute_confidence_diff,
     compute_mean,
+    configure_logging,
     extract_task_from_dataset,
     query_and_sanitize_agent_game_response,
     query_and_sanitize_baseline_response,
@@ -395,10 +396,7 @@ def generate_summary_report(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    configure_logging()
 
     # Default configuration for testing
     config = BaseGameConfig(

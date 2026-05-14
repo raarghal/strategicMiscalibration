@@ -167,7 +167,7 @@ class SanitizedUserPosteriorResponse:
 
 
 # =============================================================================
-# Base Configuration
+# Game Configuration Classes
 # =============================================================================
 
 
@@ -186,24 +186,6 @@ class BaseGameConfig:
     max_tokens: int = 512
     temperature: float = 0.0
 
-    # Prompt templates
-    baseline_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "baseline_agent_prompt.j2"
-    )
-    game_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "game_agent_prompt.j2"
-    )
-    # Prompt template for the user (agent templates inherited from BaseGameConfig)
-    user_decision_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "decision_user_prompt.j2"
-    )
-    user_posterior_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "posterior_user_prompt.j2"
-    )
-
-    # Dataset
-    dataset_name: str = "watermelonhjg/TAL-SCQ5K-EN-R1"
-
     # Game parameters
     reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
     cost: float = 0.1  # Cost the user pays to delegate the task
@@ -212,9 +194,6 @@ class BaseGameConfig:
     priors: bool = False  # Whether to supply agent with prior beliefs
     h_0: float = 0.5  # Honesty prior belief
     mu_0: float = 0.5  # Ability prior belief
-
-    # Confidence reporting
-    confidence_mode: ConfidenceMode = ConfidenceMode.CONTINUOUS
 
     # Experiment settings
     num_trials: int = 1
@@ -227,3 +206,47 @@ class BaseGameConfig:
         Compute the delegation threshold for the user.
         """
         return 1 - (self.effort - self.cost) / self.reward
+
+
+@dataclass
+class ToyGameConfig(BaseGameConfig):
+    """Configuration specific to toy game experiments."""
+
+    # Prompt templates
+    game_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_prompt.j2"
+    )
+    user_decision_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "toy/decision_user_prompt.j2"
+    )
+    user_posterior_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "toy/posterior_user_prompt.j2"
+    )
+
+    # Confidence reporting
+    confidence_mode: ConfidenceMode = ConfidenceMode.BINARY
+
+
+@dataclass
+class MathQAGameConfig(BaseGameConfig):
+    """Configuration specific to Math QA dataset experiments."""
+
+    # Prompt templates
+    baseline_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "math_qa/baseline_agent_prompt.j2"
+    )
+    game_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "math_qa/game_agent_prompt.j2"
+    )
+    user_decision_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "math_qa/decision_user_prompt.j2"
+    )
+    user_posterior_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "math_qa/posterior_user_prompt.j2"
+    )
+
+    # Dataset
+    dataset_name: str = "watermelonhjg/TAL-SCQ5K-EN-R1"
+
+    # Confidence reporting
+    confidence_mode: ConfidenceMode = ConfidenceMode.CONTINUOUS

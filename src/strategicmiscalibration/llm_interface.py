@@ -30,6 +30,17 @@ load_dotenv(ENV_FILE)
 litellm.enable_json_schema_validation = True
 
 
+def configure_logging() -> None:
+    """Configure application logging and suppress noisy third-party output."""
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    logging.getLogger().setLevel(logging.WARNING)
+    logging.getLogger("strategicuncertainty").setLevel(logging.INFO)
+    logging.getLogger("litellm").setLevel(logging.WARNING)
+
+
 # =============================================================================
 # Confidence Mode
 # =============================================================================

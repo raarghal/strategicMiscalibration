@@ -35,8 +35,11 @@ import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
+
+plt.style.use(["science", "ieee"])
 
 # ----------------------------
 # Configuration constants
@@ -47,14 +50,17 @@ HEATMAP_FIGSIZE = (13, 6)
 SAVE_DPI = 1200
 
 # Keep this default path exactly aligned with prior behavior.
-DEFAULT_EXPERIMENT_SUBDIR = (
-    "outputs/experiments/sweep_two_player_20260122_133334_figure"
-)
+DEFAULT_EXPERIMENT_SUBDIR = "outputs/experiments/sweep_two_player_20260501_213108"
 
 CONFIDENCE_PLOT_FILENAME_TEMPLATE = (
     "Cconfidence_diff_vs_discount_factor_by_round_{timestamp}.pdf"
 )
+CONFIDENCE_HEATMAP_FILENAME_TEMPLATE = (
+    "Cconfidence_diff_vs_priors_by_round_{timestamp}.pdf"
+)
 HEATMAP_PLOT_FILENAME_TEMPLATE = "Cdelegation_rate_vs_priors_by_round_{timestamp}.pdf"
+
+CONFIDENCE_HEATMAP_BIN_COUNT = 6
 
 # Round-2 binning thresholds (must preserve prior semantics):
 # <=0.2 -> 0.1, <=0.4 -> 0.3, <=0.6 -> 0.5, <=0.8 -> 0.7, else -> 0.9
@@ -347,6 +353,58 @@ def build_heatmap_inputs(
     return heatmap_df_rnd1, heatmap_df_rnd2
 
 
+def build_confidence_diff_heatmap_input(plotting_data: pd.DataFrame) -> pd.DataFrame:
+    """Build a binned pivot table for confidence-diff heatmap by priors.
+
+    Both prior axes are binned into a small number of equal-width buckets so the
+    heatmap shows a coarse aggregated surface instead of a sparse table of exact
+    prior values.
+
+    Args:
+        plotting_data: Data selected by current processing flags.
+
+    Returns:
+        pd.DataFrame: Pivot table indexed by binned prior ability and keyed by
+        binned prior honesty.
+    """
+    prior_values = pd.concat(
+        [plotting_data["prior_agent_honesty"], plotting_data["prior_agent_ability"]]
+    )
+    min_v = prior_values.min()
+    max_v = prior_values.max()
+    bin_edges = np.linspace(min_v, max_v, CONFIDENCE_HEATMAP_BIN_COUNT + 1)
+    bin_centers = [
+        (left + right) / 2.0 for left, right in zip(bin_edges[:-1], bin_edges[1:])
+    ]
+
+    binned = plotting_data.copy()
+    binned["binned_honesty"] = pd.cut(
+        binned["prior_agent_honesty"],
+        bins=bin_edges,
+        labels=bin_centers,
+        include_lowest=True,
+        right=True,
+    ).astype(float)
+    binned["binned_ability"] = pd.cut(
+        binned["prior_agent_ability"],
+        bins=bin_edges,
+        labels=bin_centers,
+        include_lowest=True,
+        right=True,
+    ).astype(float)
+
+    heatmap_df = binned.pivot_table(
+        index="binned_ability",
+        columns="binned_honesty",
+        values="confidence_diff",
+        aggfunc="mean",
+        observed=False,
+    )
+    heatmap_df = heatmap_df.reindex(sorted(heatmap_df.index), axis=0)
+    heatmap_df = heatmap_df.reindex(sorted(heatmap_df.columns), axis=1)
+    return heatmap_df
+
+
 def make_delegation_heatmap_plot(
     heatmap_df_rnd1: pd.DataFrame, heatmap_df_rnd2: pd.DataFrame
 ) -> plt.Figure:
@@ -378,6 +436,37 @@ def make_delegation_heatmap_plot(
     return fig
 
 
+def make_confidence_diff_heatmap_plot(heatmap_df: pd.DataFrame) -> plt.Figure:
+    """Create a heatmap of confidence difference against priors."""
+    # Use a square figure for symmetric priors and improve readability
+    fig, ax = plt.subplots(figsize=(8, 8))
+    sns.heatmap(
+        heatmap_df,
+        cmap="coolwarm",
+        center=0,
+        ax=ax,
+        annot=True,
+        fmt=".2f",
+        annot_kws={"fontsize": 10},
+        linewidths=0.5,
+        linecolor="white",
+        square=True,
+    )
+    ax.invert_yaxis()
+    ax.set_xlabel("Prior Belief in Agent Honesty", fontsize=12)
+    ax.set_ylabel("Prior Belief in Agent Ability", fontsize=12)
+    ax.set_title("Confidence Difference by Prior Beliefs", fontsize=14)
+
+    # Format tick labels to show numeric bin centers with reasonable font size
+    if heatmap_df.columns.dtype.kind in ("f", "i"):
+        ax.set_xticklabels([f"{v:.2f}" for v in heatmap_df.columns], fontsize=10)
+    if heatmap_df.index.dtype.kind in ("f", "i"):
+        ax.set_yticklabels([f"{v:.2f}" for v in heatmap_df.index], fontsize=10)
+
+    fig.tight_layout()
+    return fig
+
+
 def emit_figure(fig: plt.Figure, save: bool, save_path: Path | None = None) -> None:
     """Emit a figure according to execution mode.
 
@@ -392,6 +481,7 @@ def emit_figure(fig: plt.Figure, save: bool, save_path: Path | None = None) -> N
     if save:
         if save_path is None:
             raise ValueError("save_path is required when save=True")
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, format="pdf", dpi=SAVE_DPI)
         plt.close(fig)
     else:
@@ -436,14 +526,33 @@ def main() -> None:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
     confidence_fig = make_confidence_diff_plot(plotting_data)
-    confidence_path = data_dir / CONFIDENCE_PLOT_FILENAME_TEMPLATE.format(
-        timestamp=timestamp
+    confidence_path = (
+        data_dir
+        / "confidence_plots"
+        / CONFIDENCE_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
     )
     emit_figure(confidence_fig, save=args.save, save_path=confidence_path)
 
+    confidence_heatmap_df = build_confidence_diff_heatmap_input(plotting_data)
+    confidence_heatmap_fig = make_confidence_diff_heatmap_plot(confidence_heatmap_df)
+    confidence_heatmap_path = (
+        data_dir
+        / "confidence_diff_heatmaps"
+        / CONFIDENCE_HEATMAP_FILENAME_TEMPLATE.format(timestamp=timestamp)
+    )
+    emit_figure(
+        confidence_heatmap_fig,
+        save=args.save,
+        save_path=confidence_heatmap_path,
+    )
+
     heatmap_df_rnd1, heatmap_df_rnd2 = build_heatmap_inputs(plotting_data)
     heatmap_fig = make_delegation_heatmap_plot(heatmap_df_rnd1, heatmap_df_rnd2)
-    heatmap_path = data_dir / HEATMAP_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
+    heatmap_path = (
+        data_dir
+        / "delegation_heatmaps"
+        / HEATMAP_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
+    )
     emit_figure(heatmap_fig, save=args.save, save_path=heatmap_path)
 
 

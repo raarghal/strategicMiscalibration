@@ -33,6 +33,7 @@ from .llm_interface import (
     AgentGameResponse,
     UserDecisionResponse,
     UserPosteriorResponse,
+    configure_logging as configure_logging,
     load_template,
     query_llm,
 )
