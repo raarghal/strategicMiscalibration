@@ -112,6 +112,40 @@ class UserPosteriorResponse(BaseModel):
     )
 
 
+class ToyAgentSignalResponse(BaseModel):
+    """Schema for the toy-game agent's binary signal choice."""
+
+    reasoning: str = Field(description="Strategic reasoning about signal choice")
+    signal: float = Field(
+        description="The reported signal: either rho_plus or rho_minus"
+    )
+
+
+class ToyUserDecisionResponse(BaseModel):
+    """Schema for the toy-game user's delegation decision with two-belief update."""
+
+    reasoning: str = Field(description="Bayesian reasoning for delegation decision")
+    decision: str = Field(description="DELEGATE or SELF_COMPLETE")
+    belief_honesty: float = Field(
+        description="Updated honesty belief h after observing signal (0.0 to 1.0)"
+    )
+    belief_agent_ability: float = Field(
+        description="Updated ability belief mu after observing signal (0.0 to 1.0)"
+    )
+
+
+class ToyUserPosteriorResponse(BaseModel):
+    """Schema for the toy-game user's posterior belief update after observing outcome."""
+
+    reasoning: str = Field(description="Reasoning for belief update after outcome")
+    belief_honesty: float = Field(
+        description="Final honesty belief after outcome (0.0 to 1.0)"
+    )
+    belief_agent_ability: float = Field(
+        description="Final ability belief after outcome (0.0 to 1.0)"
+    )
+
+
 # =============================================================================
 # Template Loading
 # =============================================================================

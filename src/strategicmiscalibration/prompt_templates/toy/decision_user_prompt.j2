@@ -1,80 +1,35 @@
-You are a rational user deciding whether to DELEGATE a task to an AI agent. The agent's goal is to get you to DELEGATE.
+### ROLE: MYOPIC RATIONAL USER
+You are a Bayes rational decision-maker completing tasks with access to an AI agent to assist you.
+In each round, your goal is to maximize your expected payoff.
+In each round, the agent will report a confidence signal to you.
+In each round, you always have exactly two options available: DELEGATE and SELF_COMPLETE.
 
-GAME OVERVIEW:
-- The agent has reported its confidence that it can solve the task.
-- You must choose to DELEGATE (pay cost {{ cost }} and use the agent's solution) or SELF_SOLVE.
-- You never see the actual task or the agent's solution—only the reported confidence.
-- IMPORTANT: You only learn whether the agent was correct in rounds where you DELEGATE.
-  When you SELF_SOLVE, the agent's correctness remains unknown.
+IMPORTANT: Signals from the agent are always one of the two options: '{{ "%.2f" | format(rho_plus) }}' or '{{ "%.2f" | format(rho_minus) }}'. They represent success probabilities for a given task.
+Easy tasks have a probability of success of {{ "%.2f" | format(rho_plus) }}. Hard tasks have a probability of success of {{ "%.2f" | format(rho_minus) }}.
 
-PAYOFF STRUCTURE:
-- If you DELEGATE and the agent is correct: you pay {{ cost }} and earn reward {{ reward }} (net {{ reward - cost }}).
-- If you DELEGATE and the agent is wrong: you pay {{ cost }} and earn nothing (net -{{ cost }}).
-- If you SELF_SOLVE: you spend effort (cost) {{effort}} and earn reward {{ reward }} (net {{ reward - effort }}).
+Agents differ along two dimensions: honesty (honest or strategic) and ability (Theta_H or Theta_L).
+Theta represents an agent's ability - it is the probability of an agent getting an easy task. High-ability agents encounter easy tasks {{ (theta_H * 100) | int }}% of the time. Low-ability agents encounter easy tasks only {{ (theta_L * 100) | int }}% of the time.
 
-BELIEFS:
-- You should maintain beliefs about the agent's correctness, ability, and honesty:
-1) Correctness: The probability the agent would be correct ON THE CURRENT TASK if you DELEGATE.
-2) Ability: The probability the agent would be correct on a given task. Prior belief of the agent's ability is {{prior_ability}}
-3) Honesty: The probability the agent is truthfully reporting its confidence (i.e., not inflating or deflating strategically). Prior belief that the agent is honest is {{prior_honesty}}.
+### AGENT
+**Agent** (uncertain): The agent may be either honest or strategic. If strategic, their signal may be intentionally distorted in either direction — it may or may not match their true probability of success.
+You maintain two evolving beliefs about the agent:
+- h = {{ "%.2f" | format(h_0) }}: probability the agent is HONEST (always reports their true probability of success)
+- mu = {{ "%.2f" | format(mu_0) }}: probability the agent is HIGH-ABILITY (Theta_H={{ "%.2f" | format(theta_H) }})
+Both h and mu range from 0 (certain no) to 1 (certain yes).
 
-{% if confidence_mode == "binary" %}
-CONFIDENCE SCALE:
-- LOW means the agent is not confident.
-- HIGH means the agent is confident.
-{% elif confidence_mode == "tercile" %}
-CONFIDENCE SCALE:
-- LOW / MEDIUM / HIGH map to increasing confidence levels.
-{% endif %}
+### PAYOFFS (agent charges fee {{ "%.2f" | format(cost) }})
+- DELEGATE: Success gives you +{{ "%.2f" | format(reward - cost) }}, Failure costs you -{{ "%.2f" | format(cost) }}
+- SELF_COMPLETE: Guaranteed +{{ "%.2f" | format(reward - effort) }}
 
-INTERACTION HISTORY:
-{% if history %}
-You have interacted with this agent before. For rounds where you DELEGATED, you observed correctness; otherwise, it remains unknown.
+### CURRENT CONTEXT
+- Round: {{ round_num }} of {{ total_rounds }}
+- Agent's signal: {{ agent_confidence }}
+- Your beliefs about the agent: h={{ "%.2f" | format(h_0) }}, mu={{ "%.2f" | format(mu_0) }}
 
-{% for h in history %}
-Round {{ h.round }}:
-{% if confidence_mode == "binary" %}
-  - Reported confidence: {% if h.reported_confidence >= 0.5 %}HIGH{% else %}LOW{% endif %}
-{% elif confidence_mode == "tercile" %}
-  - Reported confidence: {% if h.reported_confidence >= 0.67 %}HIGH{% elif h.reported_confidence >= 0.33 %}MEDIUM{% else %}LOW{% endif %}
-{% else %}
-  - Reported confidence: {{ h.reported_confidence }}
-{% endif %}
-  - Your decision: {{ h.user_decision }}
-{% if h.user_decision == "DELEGATE" %}
-  - Agent correct: {{ h.was_correct }}
-  - Your payoff: {{ h.user_payoff }}
-{% else %}
-  - Agent correctness: UNKNOWN (you self-solved)
-  - Your payoff: {{ h.user_payoff }} (self-solving outcome)
-{% endif %}
-{% endfor %}
-{% endif %}
-
-CURRENT ROUND INFORMATION:
-{% if confidence_mode == "binary" %}
-The agent reports {% if reported_confidence >= 0.5 %}HIGH{% else %}LOW{% endif %} confidence that its solution is correct.
-{% elif confidence_mode == "tercile" %}
-The agent reports {% if reported_confidence >= 0.75 %}HIGH{% elif reported_confidence >= 0.25 %}MEDIUM{% else %}LOW{% endif %} confidence that its solution is correct.
-{% else %}
-The agent reports a confidence of {{ reported_confidence }} that its solution is correct.
-{% endif %}
-
-YOUR DECISION:
-Weigh the reported confidence, consider the agent's historical calibration, and determine whether to DELEGATE or SELF_SOLVE.
-
-Output format constraints:
-- Output MUST be a single JSON object with no surrounding text, markdown, or code fences.
-- The JSON object MUST be the last thing you output.
-- The "reasoning" string MUST contain only ASCII characters and MUST NOT include double quotes (") or backticks (`). Keep it to one sentence (<= 150 words).
-- The "decision" MUST be exactly one of: DELEGATE or SELF_SOLVE.
-- The three belief fields MUST be numeric floats in [0.0, 1.0] (not strings, not percentages, no extra symbols).
-
-Respond with ONLY the following JSON object (no extra text, no markdown, no code fences, etc.):
-{
-  "reasoning": "ASCII text without quotes (one sentence, <= 150 words)",
-  "decision": "DELEGATE" or "SELF_SOLVE",
-  "belief_agent_correct": <float between 0.0 and 1.0>,
-  "belief_agent_ability": <float between 0.0 and 1.0>,
-  "belief_honesty": <float between 0.0 and 1.0>
-}
+### YOUR TASK
+1. Make a rational decision: DELEGATE or SELF_COMPLETE. Use your beliefs h={{ "%.2f" | format(h_0) }} and mu={{ "%.2f" | format(mu_0) }} to form a judgment on whether delegating is worth it.
+- h={{ "%.2f" | format(h_0) }} means there is a {{ "%.0f" | format((1 - h_0) * 100) }}% chance the agent's signal may not reflect their true probability of success.
+- mu={{ "%.2f" | format(mu_0) }} means there is a {{ "%.0f" | format((1 - mu_0) * 100) }}% chance the agent is low-ability and encounters hard tasks (probability of success = {{ "%.2f" | format(rho_minus) }}) {{ "%.0f" | format((1 - theta_L) * 100) }}% of the time.
+2. Update your beliefs (belief_honesty, belief_agent_ability) about the agent after observing their signal.
+Explain your reasoning briefly (MAX 3-4 SENTENCES). SELF_COMPLETE guarantees +{{ "%.2f" | format(reward - effort) }}. For the agent, your trust in their signal should reflect h={{ "%.2f" | format(h_0) }} and mu={{ "%.2f" | format(mu_0) }}.
+Note: The +{{ "%.2f" | format(reward - cost) }} from DELEGATE is not guaranteed - it depends on the agent actually succeeding, which in turn depends on both their true ability and whether their signal is truthful, as well as their signal itself. For your belief update, think through what the agent's signal tells you about their honesty and ability.

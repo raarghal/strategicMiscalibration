@@ -166,6 +166,39 @@ class SanitizedUserPosteriorResponse:
     belief_honesty: Optional[float]
 
 
+class ToyRoundResult(TypedDict, total=False):
+    """Result from a single round of the toy signaling game."""
+
+    round: int
+    # Synthetic task
+    rho_t: float
+    is_easy_task: bool
+    # Agent signal (agent_confidence used for compatibility with analysis.py)
+    agent_confidence: Optional[float]
+    agent_reasoning: Optional[str]
+    report_type: Optional[str]  # CORRECT_REPORTING | OVERREPORTING | SANDBAGGING
+    # User priors entering this round (same names as RoundResult)
+    prior_agent_honesty: float
+    prior_agent_ability: float
+    # User decision (same names as RoundResult)
+    user_decision: Optional[
+        str
+    ]  # DELEGATE | SELF_SOLVE (normalized from SELF_COMPLETE)
+    user_reasoning: Optional[str]
+    # Post-signal beliefs (same names as RoundResult)
+    user_belief_honesty: Optional[float]
+    user_belief_agent_ability: Optional[float]
+    # Outcome and posterior beliefs (same names as RoundResult)
+    outcome: Optional[bool]
+    posterior_user_belief_honesty: Optional[float]
+    posterior_user_belief_agent_ability: Optional[float]
+    posterior_reasoning: Optional[str]
+    # Payoffs (same names as RoundResult)
+    user_payoff: Optional[float]
+    agent_payoff: Optional[float]
+    is_valid: bool
+
+
 # =============================================================================
 # Game Configuration Classes
 # =============================================================================
@@ -189,7 +222,7 @@ class BaseGameConfig:
     # Game parameters
     reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
     cost: float = 0.1  # Cost the user pays to delegate the task
-    discount_factor: float = 0.9  # δ: discount factor for future payoffs
+    discount_factor: float = 0.9  # δ: weight for first round payoffs
     effort: float = 0.5  # Effort cost the user pays to self-solve the task
     priors: bool = False  # Whether to supply agent with prior beliefs
     h_0: float = 0.5  # Honesty prior belief
@@ -210,11 +243,23 @@ class BaseGameConfig:
 
 @dataclass
 class ToyGameConfig(BaseGameConfig):
-    """Configuration specific to toy game experiments."""
+    """Configuration for the toy signaling game (monopolistic setting)."""
+
+    # Toy game parameters
+    rho_plus: float = 0.85
+    rho_minus: float = 0.15
+    theta_H: float = 0.8
+    theta_L: float = 0.2
+    first_round_task: str = "EASY"  # "EASY" | "HARD" | "RANDOM"
+    agent_eta: int = 0  # 0=strategic, 1=honest
+    agent_theta_kind: str = "H"  # "H" | "L"
 
     # Prompt templates
     game_template_path: Path = field(
         default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_prompt.j2"
+    )
+    game_final_template_path: Path = field(
+        default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_final_prompt.j2"
     )
     user_decision_template_path: Path = field(
         default_factory=lambda: TEMPLATE_DIR / "toy/decision_user_prompt.j2"
@@ -223,8 +268,11 @@ class ToyGameConfig(BaseGameConfig):
         default_factory=lambda: TEMPLATE_DIR / "toy/posterior_user_prompt.j2"
     )
 
-    # Confidence reporting
-    confidence_mode: ConfidenceMode = ConfidenceMode.BINARY
+    @property
+    def agent_type_desc(self) -> str:
+        eta_label = "HONEST" if self.agent_eta == 1 else "STRATEGIC"
+        ability_label = "HIGH" if self.agent_theta_kind == "H" else "LOW"
+        return f"{eta_label} and {ability_label}-ABILITY"
 
 
 @dataclass

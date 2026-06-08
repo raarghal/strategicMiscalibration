@@ -20,8 +20,8 @@ class MockResponseModel(BaseModel):
 class TestCostTracking:
     """Test suite for LLM cost tracking functionality."""
 
-    @patch("strategicuncertainty.llm_interface.completion")
-    @patch("strategicuncertainty.llm_interface.completion_cost")
+    @patch("strategicmiscalibration.llm_interface.completion")
+    @patch("strategicmiscalibration.llm_interface.completion_cost")
     def test_make_llm_request_returns_cost(self, mock_cost, mock_completion):
         """Test that _make_llm_request returns both response and cost."""
         # Mock the completion response
@@ -60,8 +60,8 @@ class TestCostTracking:
         # Verify cost calculation was called
         mock_cost.assert_called_once_with(completion_response=mock_response)
 
-    @patch("strategicuncertainty.llm_interface.completion")
-    @patch("strategicuncertainty.llm_interface.completion_cost")
+    @patch("strategicmiscalibration.llm_interface.completion")
+    @patch("strategicmiscalibration.llm_interface.completion_cost")
     def test_make_llm_request_cost_fallback(self, mock_cost, mock_completion):
         """Test that _make_llm_request falls back to 0.0 cost on error."""
         # Mock the completion response
@@ -86,8 +86,8 @@ class TestCostTracking:
         assert cost == 0.0
         assert isinstance(response, str)
 
-    @patch("strategicuncertainty.llm_interface.completion")
-    @patch("strategicuncertainty.llm_interface.completion_cost")
+    @patch("strategicmiscalibration.llm_interface.completion")
+    @patch("strategicmiscalibration.llm_interface.completion_cost")
     def test_query_llm_returns_parsed_and_cost(self, mock_cost, mock_completion):
         """Test that query_llm returns both parsed response and cost."""
         # Mock the completion response
@@ -119,8 +119,8 @@ class TestCostTracking:
         assert parsed_response.value == 42.5
         assert cost == 0.002468
 
-    @patch("strategicuncertainty.llm_interface.completion")
-    @patch("strategicuncertainty.llm_interface.completion_cost")
+    @patch("strategicmiscalibration.llm_interface.completion")
+    @patch("strategicmiscalibration.llm_interface.completion_cost")
     def test_query_llm_cost_with_parsing_error(self, mock_cost, mock_completion):
         """Test that cost is still tracked even when parsing fails."""
         # Mock the completion response with invalid JSON
@@ -145,8 +145,8 @@ class TestCostTracking:
         # Verify cost calculation was still called
         mock_cost.assert_called_once()
 
-    @patch("strategicuncertainty.llm_interface.completion")
-    @patch("strategicuncertainty.llm_interface.completion_cost")
+    @patch("strategicmiscalibration.llm_interface.completion")
+    @patch("strategicmiscalibration.llm_interface.completion_cost")
     def test_query_llm_empty_response(self, mock_cost, mock_completion):
         """Test that query_llm handles empty responses correctly."""
         # Mock the completion response with empty content
