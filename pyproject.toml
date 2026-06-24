@@ -1,21 +1,19 @@
 [project]
 name = "strategicmiscalibration"
 version = "0.1.0"
-description = ""
+description = "Research framework for studying strategic miscalibration in LLM confidence reporting."
 authors = [
-    {name = "raarghal",email = "rarghal@seas.upenn.edu"}
+    {name = "Raghu Arghal", email = "rarghal@seas.upenn.edu"},
 ]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.4.1",
-    "dotenv>=0.9.9",
-    "ipykernel>=7.2.0",
+    "python-dotenv>=1.0.0",
     "jinja2>=3.1.6",
     "litellm>=1.80.11",
     "matplotlib>=3.10.8",
     "pandas>=2.3.3",
-    "pytest>=9.0.2",
     "seaborn>=0.13.2",
     "tenacity>=9.1.2",
     "together>=1.5.33",
@@ -23,19 +21,35 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-mock>=3.12.0",
+# RL fine-tuning extension (src/strategicmiscalibration/rl). Heavy GPU stack, quarantined
+# behind this extra so `uv sync` (no extra) stays light and the torch-free env/metrics path
+# never pulls in torch. Install on the GPU box with `uv sync --extra rl`.
+# NOTE: if vllm's torch pin conflicts with the unified uv.lock, fall back to a uv workspace
+# member with its own lock (see notes/rl-decisions-log.md, open question [infra]).
+rl = [
+    "torch>=2.4",
+    "transformers>=4.45",
+    "trl>=0.12",
+    "peft>=0.13",
+    "accelerate>=1.0",
+    "vllm>=0.6.3",
 ]
-
-[tool.poetry]
-packages = [{include = "strategicmiscalibration", from = "src"}]
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.2",
+    "pytest-mock>=3.12.0",
+    "ruff>=0.13.0",
     "ipykernel>=7.2.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strategicmiscalibration"]
+
+[tool.ruff]
+line-length = 119
+target-version = "py312"

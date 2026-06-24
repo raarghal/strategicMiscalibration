@@ -68,9 +68,7 @@ def compute_payoffs(
     """Compute payoffs for both players based on the user's decision, agent correctness, and self-solve effort."""
     if user_decision == "DELEGATE":
         if agent_correct is None:
-            raise ValueError(
-                "agent_correct must be known when user_decision is DELEGATE"
-            )
+            raise ValueError("agent_correct must be known when user_decision is DELEGATE")
         agent_payoff = cost
         user_payoff = reward - cost if agent_correct else -cost
     else:
@@ -115,9 +113,7 @@ def _resolve_user_interaction(
         )
         return round_updates, None, updated_h, updated_mu
 
-    user_response = query_and_sanitize_user_decision_response(
-        cfg, agent_confidence, history, prior_h, prior_mu
-    )
+    user_response = query_and_sanitize_user_decision_response(cfg, agent_confidence, history, prior_h, prior_mu)
     user_decision = user_response.decision
     user_reasoning = user_response.reasoning
     user_belief_agent_correct = user_response.belief_agent_correct
@@ -175,9 +171,7 @@ def _resolve_user_interaction(
             posterior_user_belief_agent_ability = posterior.belief_agent_ability
         if posterior.belief_honesty is not None:
             posterior_user_belief_honesty = posterior.belief_honesty
-        round_updates["posterior_user_belief_agent_ability"] = (
-            posterior_user_belief_agent_ability
-        )
+        round_updates["posterior_user_belief_agent_ability"] = posterior_user_belief_agent_ability
         round_updates["posterior_user_belief_honesty"] = posterior_user_belief_honesty
 
     if posterior_user_belief_honesty is not None:
@@ -231,9 +225,7 @@ def run_one_trial(
         prior_h = h_t
         prior_mu = mu_t
 
-        baseline_response = query_and_sanitize_baseline_response(
-            cfg, task_data["task"], task_data["correct_solution"]
-        )
+        baseline_response = query_and_sanitize_baseline_response(cfg, task_data["task"], task_data["correct_solution"])
         baseline_solution = baseline_response.solution
         baseline_confidence = baseline_response.confidence
         baseline_correct = baseline_response.correct
@@ -293,9 +285,7 @@ def run_one_trial(
     }
 
 
-def compute_trial_statistics(
-    round_results: List[RoundResult], cfg: BaseGameConfig
-) -> TrialStatistics:
+def compute_trial_statistics(round_results: List[RoundResult], cfg: BaseGameConfig) -> TrialStatistics:
     """Compute summary statistics for a single trial."""
     if not round_results:
         return {"error": "No valid rounds in trial"}  # type: ignore[return-value]
@@ -306,9 +296,7 @@ def compute_trial_statistics(
     agent_stats = compute_agent_stats(round_results, threshold)
     comparison_stats = compute_confidence_comparison_stats(round_results)
 
-    delegation_count = sum(
-        1 for record in round_results if record.get("user_decision") == "DELEGATE"
-    )
+    delegation_count = sum(1 for record in round_results if record.get("user_decision") == "DELEGATE")
     self_solve_count = len(round_results) - delegation_count
     delegation_rate = delegation_count / len(round_results) if round_results else 0.0
 
@@ -323,32 +311,20 @@ def compute_trial_statistics(
         if record.get("user_belief_agent_ability") is not None
     ]
     user_beliefs_honesty = [
-        record["user_belief_honesty"]
-        for record in round_results
-        if record.get("user_belief_honesty") is not None
+        record["user_belief_honesty"] for record in round_results if record.get("user_belief_honesty") is not None
     ]
     mean_user_belief = compute_mean(user_beliefs)
     mean_user_belief_agent_ability = compute_mean(user_beliefs_agent_ability)
     mean_user_belief_honesty = compute_mean(user_beliefs_honesty)
     agent_accuracy = agent_stats.get("agent_accuracy")
     belief_error = (
-        abs(mean_user_belief - agent_accuracy)
-        if mean_user_belief is not None and agent_accuracy is not None
-        else None
+        abs(mean_user_belief - agent_accuracy) if mean_user_belief is not None and agent_accuracy is not None else None
     )
 
-    total_user_payoff = sum(
-        normalize_finite_float(record.get("user_payoff")) or 0.0
-        for record in round_results
-    )
-    total_agent_payoff = sum(
-        normalize_finite_float(record.get("agent_payoff")) or 0.0
-        for record in round_results
-    )
+    total_user_payoff = sum(normalize_finite_float(record.get("user_payoff")) or 0.0 for record in round_results)
+    total_agent_payoff = sum(normalize_finite_float(record.get("agent_payoff")) or 0.0 for record in round_results)
     mean_user_payoff = total_user_payoff / len(round_results) if round_results else 0.0
-    mean_agent_payoff = (
-        total_agent_payoff / len(round_results) if round_results else 0.0
-    )
+    mean_agent_payoff = total_agent_payoff / len(round_results) if round_results else 0.0
 
     stats: TrialStatistics = {
         "num_rounds": len(round_results),
@@ -391,12 +367,7 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
     logger.info("Starting two-player experiment with seed %s", cfg.seed)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_path = (
-        Path(__file__).parent.parent.parent
-        / Path(cfg.output_dir)
-        / "trials"
-        / f"two_player_{timestamp}"
-    )
+    output_path = Path(__file__).parent.parent.parent / Path(cfg.output_dir) / "trials" / f"two_player_{timestamp}"
     output_path.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory: %s", output_path)
 
@@ -421,9 +392,7 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
     all_trial_results: List[Dict[str, Any]] = []
     _progress_local = None
     if progress is None:
-        _progress_local = tqdm(
-            total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game"
-        )
+        _progress_local = tqdm(total=cfg.num_trials * cfg.num_rounds, desc="Running two-player game")
         progress = _progress_local
 
     for trial_idx in range(cfg.num_trials):
@@ -434,14 +403,8 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
     if _progress_local is not None:
         _progress_local.close()
 
-    valid_trials = [
-        trial
-        for trial in all_trial_results
-        if "error" not in trial.get("statistics", {})
-    ]
-    logger.info(
-        "Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials
-    )
+    valid_trials = [trial for trial in all_trial_results if "error" not in trial.get("statistics", {})]
+    logger.info("Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials)
 
     if valid_trials:
         overall_stats = compute_overall_statistics(valid_trials)
@@ -469,15 +432,11 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
         "trial_results": all_trial_results,
     }
 
-    with open(
-        output_path / f"results_{timestamp}.json", "w", encoding="utf-8"
-    ) as handle:
+    with open(output_path / f"results_{timestamp}.json", "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2, default=str)
 
     summary = generate_summary_report(cfg, timestamp, overall_stats)
-    with open(
-        output_path / f"summary_{timestamp}.txt", "w", encoding="utf-8"
-    ) as handle:
+    with open(output_path / f"summary_{timestamp}.txt", "w", encoding="utf-8") as handle:
         handle.write(summary)
 
     print(summary)
@@ -490,35 +449,25 @@ def run_trials(cfg: BaseGameConfig, progress: Optional[tqdm] = None) -> Dict[str
 def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Aggregate cross-trial metrics, including per-round summaries."""
     baseline_accuracies = aggregate_trial_stats(valid_trials, "baseline_accuracy")
-    baseline_confidences = aggregate_trial_stats(
-        valid_trials, "mean_baseline_confidence"
-    )
+    baseline_confidences = aggregate_trial_stats(valid_trials, "mean_baseline_confidence")
     agent_accuracies = aggregate_trial_stats(valid_trials, "agent_accuracy")
     agent_confidences = aggregate_trial_stats(valid_trials, "mean_agent_confidence")
     confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
     delegation_rates = aggregate_trial_stats(valid_trials, "delegation_rate")
     user_beliefs = aggregate_trial_stats(valid_trials, "mean_user_belief_agent_correct")
-    user_beliefs_agent_ability = aggregate_trial_stats(
-        valid_trials, "mean_user_belief_agent_ability"
-    )
-    user_beliefs_honesty = aggregate_trial_stats(
-        valid_trials, "mean_user_belief_honesty"
-    )
+    user_beliefs_agent_ability = aggregate_trial_stats(valid_trials, "mean_user_belief_agent_ability")
+    user_beliefs_honesty = aggregate_trial_stats(valid_trials, "mean_user_belief_honesty")
     posterior_user_beliefs_agent_ability = aggregate_trial_stats(
         valid_trials, "mean_posterior_user_belief_agent_ability"
     )
-    posterior_user_beliefs_honesty = aggregate_trial_stats(
-        valid_trials, "mean_posterior_user_belief_honesty"
-    )
+    posterior_user_beliefs_honesty = aggregate_trial_stats(valid_trials, "mean_posterior_user_belief_honesty")
     belief_errors = aggregate_trial_stats(valid_trials, "user_belief_error")
 
     # Per-round aggregated statistics across trials
     per_round_stats: Dict[int, Dict[str, Optional[float]]] = {}
     max_rounds = max((len(t["round_results"]) for t in valid_trials), default=0)
     for r in range(max_rounds):
-        rounds = [
-            t["round_results"][r] for t in valid_trials if len(t["round_results"]) > r
-        ]
+        rounds = [t["round_results"][r] for t in valid_trials if len(t["round_results"]) > r]
         if not rounds:
             continue
 
@@ -528,50 +477,26 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
             return 1.0 if bool(v) else 0.0
 
         baseline_acc_vals = [
-            to_float_bool(rnd.get("baseline_correct"))
-            for rnd in rounds
-            if rnd.get("baseline_correct") is not None
+            to_float_bool(rnd.get("baseline_correct")) for rnd in rounds if rnd.get("baseline_correct") is not None
         ]
         baseline_conf_vals = [
-            rnd.get("baseline_confidence")
-            for rnd in rounds
-            if rnd.get("baseline_confidence") is not None
+            rnd.get("baseline_confidence") for rnd in rounds if rnd.get("baseline_confidence") is not None
         ]
         agent_acc_vals = [
-            to_float_bool(rnd.get("agent_correct"))
-            for rnd in rounds
-            if rnd.get("agent_correct") is not None
+            to_float_bool(rnd.get("agent_correct")) for rnd in rounds if rnd.get("agent_correct") is not None
         ]
-        agent_conf_vals = [
-            rnd.get("agent_confidence")
-            for rnd in rounds
-            if rnd.get("agent_confidence") is not None
-        ]
-        conf_diff_vals = [
-            rnd.get("confidence_diff")
-            for rnd in rounds
-            if rnd.get("confidence_diff") is not None
-        ]
+        agent_conf_vals = [rnd.get("agent_confidence") for rnd in rounds if rnd.get("agent_confidence") is not None]
+        conf_diff_vals = [rnd.get("confidence_diff") for rnd in rounds if rnd.get("confidence_diff") is not None]
         delegation_vals = [
             1.0 if rnd.get("user_decision") == "DELEGATE" else 0.0
             for rnd in rounds
             if rnd.get("user_decision") in {"DELEGATE", "SELF_SOLVE"}
         ]
         belief_vals = [
-            rnd.get("user_belief_agent_correct")
-            for rnd in rounds
-            if rnd.get("user_belief_agent_correct") is not None
+            rnd.get("user_belief_agent_correct") for rnd in rounds if rnd.get("user_belief_agent_correct") is not None
         ]
-        user_payoff_vals = [
-            rnd.get("user_payoff")
-            for rnd in rounds
-            if rnd.get("user_payoff") is not None
-        ]
-        agent_payoff_vals = [
-            rnd.get("agent_payoff")
-            for rnd in rounds
-            if rnd.get("agent_payoff") is not None
-        ]
+        user_payoff_vals = [rnd.get("user_payoff") for rnd in rounds if rnd.get("user_payoff") is not None]
+        agent_payoff_vals = [rnd.get("agent_payoff") for rnd in rounds if rnd.get("agent_payoff") is not None]
 
         # Count confidence change categories by round
         inflated_count = sum(1 for v in conf_diff_vals if v is not None and v > 0)
@@ -600,34 +525,20 @@ def compute_overall_statistics(valid_trials: List[Dict[str, Any]]) -> Dict[str, 
         "mean_agent_accuracy": compute_mean(agent_accuracies),
         "mean_agent_confidence": compute_mean(agent_confidences),
         "mean_confidence_diff": compute_mean(confidence_diffs),
-        "total_confidence_inflated": sum_trial_stats(
-            valid_trials, "confidence_inflated_count"
-        ),
-        "total_confidence_deflated": sum_trial_stats(
-            valid_trials, "confidence_deflated_count"
-        ),
-        "total_confidence_unchanged": sum_trial_stats(
-            valid_trials, "confidence_unchanged_count"
-        ),
+        "total_confidence_inflated": sum_trial_stats(valid_trials, "confidence_inflated_count"),
+        "total_confidence_deflated": sum_trial_stats(valid_trials, "confidence_deflated_count"),
+        "total_confidence_unchanged": sum_trial_stats(valid_trials, "confidence_unchanged_count"),
         "mean_delegation_rate": compute_mean(delegation_rates),
         "mean_user_belief_agent_correct": compute_mean(user_beliefs),
         "mean_user_belief_agent_ability": compute_mean(user_beliefs_agent_ability),
         "mean_user_belief_honesty": compute_mean(user_beliefs_honesty),
-        "mean_posterior_user_belief_agent_ability": compute_mean(
-            posterior_user_beliefs_agent_ability
-        ),
-        "mean_posterior_user_belief_honesty": compute_mean(
-            posterior_user_beliefs_honesty
-        ),
+        "mean_posterior_user_belief_agent_ability": compute_mean(posterior_user_beliefs_agent_ability),
+        "mean_posterior_user_belief_honesty": compute_mean(posterior_user_beliefs_honesty),
         "mean_user_belief_error": compute_mean(belief_errors),
         "total_user_payoff": sum_trial_stats(valid_trials, "total_user_payoff"),
         "total_agent_payoff": sum_trial_stats(valid_trials, "total_agent_payoff"),
-        "mean_user_payoff_per_round": compute_mean(
-            aggregate_trial_stats(valid_trials, "mean_user_payoff")
-        ),
-        "mean_agent_payoff_per_round": compute_mean(
-            aggregate_trial_stats(valid_trials, "mean_agent_payoff")
-        ),
+        "mean_user_payoff_per_round": compute_mean(aggregate_trial_stats(valid_trials, "mean_user_payoff")),
+        "mean_agent_payoff_per_round": compute_mean(aggregate_trial_stats(valid_trials, "mean_agent_payoff")),
         "per_round_statistics": per_round_stats,
     }
 
@@ -666,13 +577,9 @@ def generate_summary_report(
             ]
         )
         if overall_stats.get("mean_baseline_accuracy") is not None:
-            lines.append(
-                f"  Mean accuracy: {overall_stats['mean_baseline_accuracy']:.4f}"
-            )
+            lines.append(f"  Mean accuracy: {overall_stats['mean_baseline_accuracy']:.4f}")
         if overall_stats.get("mean_baseline_confidence") is not None:
-            lines.append(
-                f"  Mean confidence: {overall_stats['mean_baseline_confidence']:.4f}"
-            )
+            lines.append(f"  Mean confidence: {overall_stats['mean_baseline_confidence']:.4f}")
 
         lines.extend(
             [
@@ -683,9 +590,7 @@ def generate_summary_report(
         if overall_stats.get("mean_agent_accuracy") is not None:
             lines.append(f"  Mean accuracy: {overall_stats['mean_agent_accuracy']:.4f}")
         if overall_stats.get("mean_agent_confidence") is not None:
-            lines.append(
-                f"  Mean reported confidence: {overall_stats['mean_agent_confidence']:.4f}"
-            )
+            lines.append(f"  Mean reported confidence: {overall_stats['mean_agent_confidence']:.4f}")
 
         lines.extend(
             [
@@ -694,18 +599,10 @@ def generate_summary_report(
             ]
         )
         if overall_stats.get("mean_confidence_diff") is not None:
-            lines.append(
-                f"  Mean difference: {overall_stats['mean_confidence_diff']:.4f}"
-            )
-        lines.append(
-            f"  Inflated (strategic > baseline): {overall_stats['total_confidence_inflated']} times"
-        )
-        lines.append(
-            f"  Deflated (strategic < baseline): {overall_stats['total_confidence_deflated']} times"
-        )
-        lines.append(
-            f"  Unchanged: {overall_stats['total_confidence_unchanged']} times"
-        )
+            lines.append(f"  Mean difference: {overall_stats['mean_confidence_diff']:.4f}")
+        lines.append(f"  Inflated (strategic > baseline): {overall_stats['total_confidence_inflated']} times")
+        lines.append(f"  Deflated (strategic < baseline): {overall_stats['total_confidence_deflated']} times")
+        lines.append(f"  Unchanged: {overall_stats['total_confidence_unchanged']} times")
 
         lines.extend(
             [
@@ -714,17 +611,11 @@ def generate_summary_report(
             ]
         )
         if overall_stats.get("mean_delegation_rate") is not None:
-            lines.append(
-                f"  Delegation rate: {overall_stats['mean_delegation_rate']:.4f}"
-            )
+            lines.append(f"  Delegation rate: {overall_stats['mean_delegation_rate']:.4f}")
         if overall_stats.get("mean_user_belief_agent_correct") is not None:
-            lines.append(
-                f"  Mean belief agent is correct: {overall_stats['mean_user_belief_agent_correct']:.4f}"
-            )
+            lines.append(f"  Mean belief agent is correct: {overall_stats['mean_user_belief_agent_correct']:.4f}")
         if overall_stats.get("mean_user_belief_error") is not None:
-            lines.append(
-                f"  User belief calibration error: {overall_stats['mean_user_belief_error']:.4f}"
-            )
+            lines.append(f"  User belief calibration error: {overall_stats['mean_user_belief_error']:.4f}")
 
         lines.extend(
             [
@@ -733,21 +624,13 @@ def generate_summary_report(
             ]
         )
         if overall_stats.get("total_user_payoff") is not None:
-            lines.append(
-                f"  Total user payoff: {overall_stats['total_user_payoff']:.2f}"
-            )
+            lines.append(f"  Total user payoff: {overall_stats['total_user_payoff']:.2f}")
         if overall_stats.get("total_agent_payoff") is not None:
-            lines.append(
-                f"  Total agent payoff: {overall_stats['total_agent_payoff']:.2f}"
-            )
+            lines.append(f"  Total agent payoff: {overall_stats['total_agent_payoff']:.2f}")
         if overall_stats.get("mean_user_payoff_per_round") is not None:
-            lines.append(
-                f"  Mean user payoff per round: {overall_stats['mean_user_payoff_per_round']:.4f}"
-            )
+            lines.append(f"  Mean user payoff per round: {overall_stats['mean_user_payoff_per_round']:.4f}")
         if overall_stats.get("mean_agent_payoff_per_round") is not None:
-            lines.append(
-                f"  Mean agent payoff per round: {overall_stats['mean_agent_payoff_per_round']:.4f}"
-            )
+            lines.append(f"  Mean agent payoff per round: {overall_stats['mean_agent_payoff_per_round']:.4f}")
 
         # Per-round statistics section
         per_round = overall_stats.get("per_round_statistics") or {}
@@ -756,65 +639,41 @@ def generate_summary_report(
             for r in sorted(per_round.keys()):
                 rs = per_round[r]
                 lines.append(f"  Round {r}:")
-                if (
-                    rs.get("baseline_accuracy") is not None
-                    and rs.get("baseline_confidence") is not None
-                ):
+                if rs.get("baseline_accuracy") is not None and rs.get("baseline_confidence") is not None:
                     lines.append(
                         f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}, confidence: {rs['baseline_confidence']:.4f}"
                     )
                 elif rs.get("baseline_accuracy") is not None:
-                    lines.append(
-                        f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}"
-                    )
+                    lines.append(f"    Baseline - accuracy: {rs['baseline_accuracy']:.4f}")
                 elif rs.get("baseline_confidence") is not None:
-                    lines.append(
-                        f"    Baseline - confidence: {rs['baseline_confidence']:.4f}"
-                    )
+                    lines.append(f"    Baseline - confidence: {rs['baseline_confidence']:.4f}")
 
-                if (
-                    rs.get("agent_accuracy") is not None
-                    and rs.get("agent_confidence") is not None
-                ):
+                if rs.get("agent_accuracy") is not None and rs.get("agent_confidence") is not None:
                     lines.append(
                         f"    Agent - accuracy: {rs['agent_accuracy']:.4f}, reported confidence: {rs['agent_confidence']:.4f}"
                     )
                 elif rs.get("agent_accuracy") is not None:
                     lines.append(f"    Agent - accuracy: {rs['agent_accuracy']:.4f}")
                 elif rs.get("agent_confidence") is not None:
-                    lines.append(
-                        f"    Agent - reported confidence: {rs['agent_confidence']:.4f}"
-                    )
+                    lines.append(f"    Agent - reported confidence: {rs['agent_confidence']:.4f}")
 
                 if rs.get("confidence_diff") is not None:
-                    lines.append(
-                        f"    Confidence diff (strategic - baseline): {rs['confidence_diff']:.4f}"
-                    )
+                    lines.append(f"    Confidence diff (strategic - baseline): {rs['confidence_diff']:.4f}")
                 # Per-round confidence change counts
                 if rs.get("confidence_inflated_count") is not None:
-                    lines.append(
-                        f"    Confidence inflated rounds: {int(rs['confidence_inflated_count'])}"
-                    )
+                    lines.append(f"    Confidence inflated rounds: {int(rs['confidence_inflated_count'])}")
                 if rs.get("confidence_deflated_count") is not None:
-                    lines.append(
-                        f"    Confidence deflated rounds: {int(rs['confidence_deflated_count'])}"
-                    )
+                    lines.append(f"    Confidence deflated rounds: {int(rs['confidence_deflated_count'])}")
                 if rs.get("confidence_unchanged_count") is not None:
-                    lines.append(
-                        f"    Confidence unchanged rounds: {int(rs['confidence_unchanged_count'])}"
-                    )
+                    lines.append(f"    Confidence unchanged rounds: {int(rs['confidence_unchanged_count'])}")
                 if rs.get("delegation_rate") is not None:
                     lines.append(f"    Delegation rate: {rs['delegation_rate']:.4f}")
                 if rs.get("user_belief_agent_correct") is not None:
-                    lines.append(
-                        f"    Mean user belief agent is correct: {rs['user_belief_agent_correct']:.4f}"
-                    )
+                    lines.append(f"    Mean user belief agent is correct: {rs['user_belief_agent_correct']:.4f}")
                 if rs.get("mean_user_payoff") is not None:
                     lines.append(f"    Mean user payoff: {rs['mean_user_payoff']:.4f}")
                 if rs.get("mean_agent_payoff") is not None:
-                    lines.append(
-                        f"    Mean agent payoff: {rs['mean_agent_payoff']:.4f}"
-                    )
+                    lines.append(f"    Mean agent payoff: {rs['mean_agent_payoff']:.4f}")
     else:
         lines.append(f"  Error: {overall_stats['error']}")
 
@@ -822,9 +681,7 @@ def generate_summary_report(
     return "\n".join(lines)
 
 
-def run_experiments(
-    configs: List[BaseGameConfig], output_path: Path | str
-) -> pd.DataFrame:
+def run_experiments(configs: List[BaseGameConfig], output_path: Path | str) -> pd.DataFrame:
     """
     Run experiments for multiple configurations and export the results.
 
@@ -905,12 +762,7 @@ if __name__ == "__main__":
     configure_logging()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_filename = (
-        Path(__file__).parent.parent.parent
-        / "outputs"
-        / "experiments"
-        / f"sweep_two_player_{timestamp}"
-    )
+    output_filename = Path(__file__).parent.parent.parent / "outputs" / "experiments" / f"sweep_two_player_{timestamp}"
     deltas = [
         0.1,
         0.5,

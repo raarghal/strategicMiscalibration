@@ -55,11 +55,7 @@ def extract_task_from_dataset(sample: Dict[str, Any]) -> TaskData:
     correct_solution = ""
     if solution:
         solution_stripped = solution.strip()
-        if (
-            solution_stripped.startswith("(")
-            and len(solution_stripped) >= 2
-            and solution_stripped[1].isalpha()
-        ):
+        if solution_stripped.startswith("(") and len(solution_stripped) >= 2 and solution_stripped[1].isalpha():
             correct_solution = solution_stripped[1]
         elif solution_stripped and solution_stripped[0].isalpha():
             correct_solution = solution_stripped[0]
@@ -88,9 +84,7 @@ def evaluate_solution(response_solution: str, correct_solution: str) -> bool:
         elif correct_normalized[0].isalpha():
             correct_letter = correct_normalized[0]
 
-    return bool(
-        response_letter and correct_letter and response_letter == correct_letter
-    )
+    return bool(response_letter and correct_letter and response_letter == correct_letter)
 
 
 # =============================================================================
@@ -226,9 +220,7 @@ def sanitize_baseline_response(
         )
     solution = normalize_text(response.solution)
     confidence = normalize_probability(response.confidence)
-    correct = (
-        evaluate_solution(solution, correct_solution) if solution is not None else None
-    )
+    correct = evaluate_solution(solution, correct_solution) if solution is not None else None
     is_valid = solution is not None and confidence is not None and correct is not None
     return SanitizedBaselineResponse(
         is_valid=is_valid,
@@ -254,15 +246,8 @@ def sanitize_agent_game_response(
     solution = normalize_text(response.solution)
     confidence = normalize_probability(response.confidence)
     reasoning = normalize_text(response.reasoning)
-    correct = (
-        evaluate_solution(solution, correct_solution) if solution is not None else None
-    )
-    is_valid = (
-        solution is not None
-        and confidence is not None
-        and reasoning is not None
-        and correct is not None
-    )
+    correct = evaluate_solution(solution, correct_solution) if solution is not None else None
+    is_valid = solution is not None and confidence is not None and reasoning is not None and correct is not None
     return SanitizedAgentGameResponse(
         is_valid=is_valid,
         solution=solution,
@@ -325,11 +310,7 @@ def sanitize_user_posterior_response(
     belief_agent_ability = normalize_probability(response.belief_agent_ability)
     belief_honesty = normalize_probability(response.belief_honesty)
     belief_agent_correct = normalize_probability(response.belief_agent_correct)
-    is_valid = (
-        reasoning is not None
-        and belief_agent_ability is not None
-        and belief_honesty is not None
-    )
+    is_valid = reasoning is not None and belief_agent_ability is not None and belief_honesty is not None
     return SanitizedUserPosteriorResponse(
         is_valid=is_valid,
         reasoning=reasoning,
@@ -417,6 +398,8 @@ def solve_task_without_game_context(
     logger.debug(f"Solving baseline task with agent {cfg.agent_model_name}")
     prompt = load_template(
         cfg.baseline_template_path,
+        output_mode=cfg.output_mode,
+        response_schema=AgentBaselineResponse,
         task=task,
         confidence_mode=cfg.confidence_mode.value,
     )
@@ -426,6 +409,7 @@ def solve_task_without_game_context(
         AgentBaselineResponse,
         cfg.max_tokens,
         cfg.temperature,
+        output_mode=cfg.output_mode,
     )
     return response
 
@@ -436,14 +420,10 @@ def solve_task_with_game_context(
     history: Optional[List[HistoryEntry]] = None,
 ) -> AgentGameResponse:
     """Query the agent LLM on a task with strategic context."""
-    logger.debug(
-        f"Solving task with strategic context using agent {cfg.agent_model_name}"
-    )
+    logger.debug(f"Solving task with strategic context using agent {cfg.agent_model_name}")
 
     if history:
-        delegation_count = sum(
-            1 for h in history if h.get("user_decision") == "DELEGATE"
-        )
+        delegation_count = sum(1 for h in history if h.get("user_decision") == "DELEGATE")
         correct_count = sum(1 for h in history if h.get("was_correct"))
         agent_accuracy = correct_count / len(history)
         total_agent_payoff = sum(h.get("agent_payoff", 0) for h in history)
@@ -457,6 +437,8 @@ def solve_task_with_game_context(
 
     prompt = load_template(
         cfg.game_template_path,
+        output_mode=cfg.output_mode,
+        response_schema=AgentGameResponse,
         task=task,
         reward=cfg.reward,
         cost=cfg.cost,
@@ -474,9 +456,13 @@ def solve_task_with_game_context(
         prior_honesty=cfg.h_0,
         prior_capability=cfg.mu_0,
     )
-    # print(prompt)
     response, _ = query_llm(
-        cfg.agent_model_name, prompt, AgentGameResponse, cfg.max_tokens, cfg.temperature
+        cfg.agent_model_name,
+        prompt,
+        AgentGameResponse,
+        cfg.max_tokens,
+        cfg.temperature,
+        output_mode=cfg.output_mode,
     )
     return response
 
@@ -509,9 +495,7 @@ def query_user_delegation(
                 if record.get("was_correct"):
                     high_confidence_delegated_correct += 1
 
-    delegated_accuracy = (
-        delegated_correct / delegation_count if delegation_count > 0 else "N/A"
-    )
+    delegated_accuracy = delegated_correct / delegation_count if delegation_count > 0 else "N/A"
     high_confidence_delegated_accuracy = (
         high_confidence_delegated_correct / high_confidence_delegation_count
         if high_confidence_delegation_count > 0
@@ -520,6 +504,8 @@ def query_user_delegation(
 
     prompt = load_template(
         cfg.user_decision_template_path,
+        output_mode=cfg.output_mode,
+        response_schema=UserDecisionResponse,
         reported_confidence=reported_confidence,
         history=history,
         threshold=threshold,
@@ -543,6 +529,7 @@ def query_user_delegation(
         UserDecisionResponse,
         cfg.max_tokens,
         cfg.temperature,
+        output_mode=cfg.output_mode,
     )
     return response
 
@@ -562,6 +549,8 @@ def query_user_posterior(
 
     prompt = load_template(
         cfg.user_posterior_template_path,
+        output_mode=cfg.output_mode,
+        response_schema=UserPosteriorResponse,
         reported_confidence=reported_confidence,
         agent_correct=agent_correct,
         prior_belief_agent_correct=prior_beliefs.get("belief_agent_correct"),
@@ -581,6 +570,7 @@ def query_user_posterior(
         UserPosteriorResponse,
         cfg.max_tokens,
         cfg.temperature,
+        output_mode=cfg.output_mode,
     )
     return response
 
@@ -616,47 +606,31 @@ def compute_confidence_comparison_stats(
 
 def compute_baseline_stats(round_results: List[RoundResult]) -> Dict[str, Any]:
     """Compute baseline performance statistics."""
-    baseline_confidences = filter_none(
-        [r.get("baseline_confidence") for r in round_results]
-    )
-    baseline_rounds = [
-        r for r in round_results if r.get("baseline_correct") is not None
-    ]
+    baseline_confidences = filter_none([r.get("baseline_confidence") for r in round_results])
+    baseline_rounds = [r for r in round_results if r.get("baseline_correct") is not None]
     baseline_correct = sum(1 for r in baseline_rounds if r.get("baseline_correct"))
 
     return {
-        "baseline_accuracy": baseline_correct / len(baseline_rounds)
-        if baseline_rounds
-        else None,
+        "baseline_accuracy": baseline_correct / len(baseline_rounds) if baseline_rounds else None,
         "mean_baseline_confidence": compute_mean(baseline_confidences),
     }
 
 
-def compute_agent_stats(
-    round_results: List[RoundResult], threshold: float
-) -> Dict[str, Any]:
+def compute_agent_stats(round_results: List[RoundResult], threshold: float) -> Dict[str, Any]:
     """Compute agent performance statistics with strategic context."""
     agent_confidences = filter_none([r.get("agent_confidence") for r in round_results])
     agent_rounds = [r for r in round_results if r.get("agent_correct") is not None]
     agent_correct = sum(1 for r in agent_rounds if r.get("agent_correct"))
 
     high_confidence_rounds = [
-        r
-        for r in agent_rounds
-        if r.get("agent_confidence") is not None and r["agent_confidence"] >= threshold
+        r for r in agent_rounds if r.get("agent_confidence") is not None and r["agent_confidence"] >= threshold
     ]
     low_confidence_rounds = [
-        r
-        for r in agent_rounds
-        if r.get("agent_confidence") is not None and r["agent_confidence"] < threshold
+        r for r in agent_rounds if r.get("agent_confidence") is not None and r["agent_confidence"] < threshold
     ]
 
-    high_confidence_correct = sum(
-        1 for r in high_confidence_rounds if r.get("agent_correct")
-    )
-    low_confidence_correct = sum(
-        1 for r in low_confidence_rounds if r.get("agent_correct")
-    )
+    high_confidence_correct = sum(1 for r in high_confidence_rounds if r.get("agent_correct"))
+    low_confidence_correct = sum(1 for r in low_confidence_rounds if r.get("agent_correct"))
 
     total_rounds = len(agent_rounds)
 
@@ -664,8 +638,7 @@ def compute_agent_stats(
         "agent_accuracy": agent_correct / total_rounds if total_rounds else 0.0,
         "mean_agent_confidence": compute_mean(agent_confidences),
         "high_confidence_count": len(high_confidence_rounds),
-        "high_confidence_accuracy": high_confidence_correct
-        / len(high_confidence_rounds)
+        "high_confidence_accuracy": high_confidence_correct / len(high_confidence_rounds)
         if high_confidence_rounds
         else None,
         "low_confidence_count": len(low_confidence_rounds),
@@ -675,22 +648,14 @@ def compute_agent_stats(
     }
 
 
-def aggregate_trial_stats(
-    trial_results: List[Dict[str, Any]], stat_key: str
-) -> List[float]:
+def aggregate_trial_stats(trial_results: List[Dict[str, Any]], stat_key: str) -> List[float]:
     """Aggregate a specific statistic across multiple trials, filtering None values."""
-    return [
-        t["statistics"][stat_key]
-        for t in trial_results
-        if t.get("statistics", {}).get(stat_key) is not None
-    ]
+    return [t["statistics"][stat_key] for t in trial_results if t.get("statistics", {}).get(stat_key) is not None]
 
 
 def sum_trial_stats(trial_results: List[Dict[str, Any]], stat_key: str) -> float:
     """Sum a specific statistic across multiple trials."""
-    return sum(
-        t["statistics"].get(stat_key, 0) for t in trial_results if "statistics" in t
-    )
+    return sum(t["statistics"].get(stat_key, 0) for t in trial_results if "statistics" in t)
 
 
 def load_two_player_results_to_df(results_path: Path | str):

@@ -15,6 +15,7 @@ from typing import Optional, TypedDict
 
 from .llm_interface import (
     ConfidenceMode,
+    OutputMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,9 +182,7 @@ class ToyRoundResult(TypedDict, total=False):
     prior_agent_honesty: float
     prior_agent_ability: float
     # User decision (same names as RoundResult)
-    user_decision: Optional[
-        str
-    ]  # DELEGATE | SELF_SOLVE (normalized from SELF_COMPLETE)
+    user_decision: Optional[str]  # DELEGATE | SELF_SOLVE (normalized from SELF_COMPLETE)
     user_reasoning: Optional[str]
     # Post-signal beliefs (same names as RoundResult)
     user_belief_honesty: Optional[float]
@@ -218,6 +217,8 @@ class BaseGameConfig:
     agent_model_name: str = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
     max_tokens: int = 512
     temperature: float = 0.0
+    # How structured output is obtained: native JSON schema, or text + parsing.
+    output_mode: OutputMode = OutputMode.JSON_SCHEMA
 
     # Game parameters
     reward: float = 1.0  # Reward the user gains if a delegated task is solved correctly
@@ -233,6 +234,17 @@ class BaseGameConfig:
     num_rounds: int = 10
     output_dir: str = "outputs"
     seed: int = 42
+
+    def __post_init__(self) -> None:
+        """Validate game parameters at construction so bad configs fail fast."""
+        if not (0.0 <= self.h_0 <= 1.0):
+            raise ValueError(f"h_0 must be in [0, 1], got {self.h_0}")
+        if not (0.0 <= self.mu_0 <= 1.0):
+            raise ValueError(f"mu_0 must be in [0, 1], got {self.mu_0}")
+        if self.num_rounds < 1:
+            raise ValueError(f"num_rounds must be >= 1, got {self.num_rounds}")
+        if self.cost >= self.effort:
+            raise ValueError(f"cost ({self.cost}) must be < effort ({self.effort}) for delegation to be rational")
 
     def compute_threshold(self) -> float:
         """
@@ -255,18 +267,10 @@ class ToyGameConfig(BaseGameConfig):
     agent_theta_kind: str = "H"  # "H" | "L"
 
     # Prompt templates
-    game_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_prompt.j2"
-    )
-    game_final_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_final_prompt.j2"
-    )
-    user_decision_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "toy/decision_user_prompt.j2"
-    )
-    user_posterior_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "toy/posterior_user_prompt.j2"
-    )
+    game_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_prompt.j2")
+    game_final_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "toy/game_agent_final_prompt.j2")
+    user_decision_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "toy/decision_user_prompt.j2")
+    user_posterior_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "toy/posterior_user_prompt.j2")
 
     @property
     def agent_type_desc(self) -> str:
@@ -280,15 +284,9 @@ class MathQAGameConfig(BaseGameConfig):
     """Configuration specific to Math QA dataset experiments."""
 
     # Prompt templates
-    baseline_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "math_qa/baseline_agent_prompt.j2"
-    )
-    game_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "math_qa/game_agent_prompt.j2"
-    )
-    user_decision_template_path: Path = field(
-        default_factory=lambda: TEMPLATE_DIR / "math_qa/decision_user_prompt.j2"
-    )
+    baseline_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "math_qa/baseline_agent_prompt.j2")
+    game_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "math_qa/game_agent_prompt.j2")
+    user_decision_template_path: Path = field(default_factory=lambda: TEMPLATE_DIR / "math_qa/decision_user_prompt.j2")
     user_posterior_template_path: Path = field(
         default_factory=lambda: TEMPLATE_DIR / "math_qa/posterior_user_prompt.j2"
     )

@@ -20,12 +20,12 @@ Selection logic for `plotting_data` is intentionally explicit:
 - both flags        -> `df_correct_filtered`
 
 Usage examples (from repository root):
-    uv run -m strategicuncertainty.analysis
-    uv run -m strategicuncertainty.analysis --filter
-    uv run -m strategicuncertainty.analysis --correct
-    uv run -m strategicuncertainty.analysis --filter --correct
-    uv run -m strategicuncertainty.analysis --filter --correct --save
-    uv run -m strategicuncertainty.analysis --data-dir outputs/experiments/<run> --save
+    uv run -m strategicmiscalibration.analysis
+    uv run -m strategicmiscalibration.analysis --filter
+    uv run -m strategicmiscalibration.analysis --correct
+    uv run -m strategicmiscalibration.analysis --filter --correct
+    uv run -m strategicmiscalibration.analysis --filter --correct --save
+    uv run -m strategicmiscalibration.analysis --data-dir outputs/experiments/<run> --save
 """
 
 from __future__ import annotations
@@ -52,12 +52,8 @@ SAVE_DPI = 1200
 # Keep this default path exactly aligned with prior behavior.
 DEFAULT_EXPERIMENT_SUBDIR = "outputs/experiments/sweep_two_player_20260501_213108"
 
-CONFIDENCE_PLOT_FILENAME_TEMPLATE = (
-    "Cconfidence_diff_vs_discount_factor_by_round_{timestamp}.pdf"
-)
-CONFIDENCE_HEATMAP_FILENAME_TEMPLATE = (
-    "Cconfidence_diff_vs_priors_by_round_{timestamp}.pdf"
-)
+CONFIDENCE_PLOT_FILENAME_TEMPLATE = "Cconfidence_diff_vs_discount_factor_by_round_{timestamp}.pdf"
+CONFIDENCE_HEATMAP_FILENAME_TEMPLATE = "Cconfidence_diff_vs_priors_by_round_{timestamp}.pdf"
 HEATMAP_PLOT_FILENAME_TEMPLATE = "Cdelegation_rate_vs_priors_by_round_{timestamp}.pdf"
 
 CONFIDENCE_HEATMAP_BIN_COUNT = 6
@@ -210,13 +206,9 @@ def build_subsets(
             - df_correct
             - df_correct_filtered
     """
-    df_filtered = df[
-        (df["confidence_diff"] >= lower_bound) & (df["confidence_diff"] <= upper_bound)
-    ].copy()
+    df_filtered = df[(df["confidence_diff"] >= lower_bound) & (df["confidence_diff"] <= upper_bound)].copy()
 
-    df_outliers = df[
-        (df["confidence_diff"] < lower_bound) | (df["confidence_diff"] > upper_bound)
-    ].copy()
+    df_outliers = df[(df["confidence_diff"] < lower_bound) | (df["confidence_diff"] > upper_bound)].copy()
 
     df_correct = df[(df["agent_confidence"] > 0) & (df["baseline_confidence"] > 0)]
 
@@ -367,15 +359,11 @@ def build_confidence_diff_heatmap_input(plotting_data: pd.DataFrame) -> pd.DataF
         pd.DataFrame: Pivot table indexed by binned prior ability and keyed by
         binned prior honesty.
     """
-    prior_values = pd.concat(
-        [plotting_data["prior_agent_honesty"], plotting_data["prior_agent_ability"]]
-    )
+    prior_values = pd.concat([plotting_data["prior_agent_honesty"], plotting_data["prior_agent_ability"]])
     min_v = prior_values.min()
     max_v = prior_values.max()
     bin_edges = np.linspace(min_v, max_v, CONFIDENCE_HEATMAP_BIN_COUNT + 1)
-    bin_centers = [
-        (left + right) / 2.0 for left, right in zip(bin_edges[:-1], bin_edges[1:])
-    ]
+    bin_centers = [(left + right) / 2.0 for left, right in zip(bin_edges[:-1], bin_edges[1:])]
 
     binned = plotting_data.copy()
     binned["binned_honesty"] = pd.cut(
@@ -405,9 +393,7 @@ def build_confidence_diff_heatmap_input(plotting_data: pd.DataFrame) -> pd.DataF
     return heatmap_df
 
 
-def make_delegation_heatmap_plot(
-    heatmap_df_rnd1: pd.DataFrame, heatmap_df_rnd2: pd.DataFrame
-) -> plt.Figure:
+def make_delegation_heatmap_plot(heatmap_df_rnd1: pd.DataFrame, heatmap_df_rnd2: pd.DataFrame) -> plt.Figure:
     """Create side-by-side delegation-rate heatmaps for rounds 0 and 1.
 
     Args:
@@ -499,9 +485,7 @@ def main() -> None:
     df = load_and_prepare_dataframe(datafile)
     lower_bound, upper_bound = compute_confidence_diff_bounds(df)
 
-    df_filtered, df_outliers, df_correct, df_correct_filtered = build_subsets(
-        df, lower_bound, upper_bound
-    )
+    df_filtered, df_outliers, df_correct, df_correct_filtered = build_subsets(df, lower_bound, upper_bound)
 
     plotting_data = select_plotting_data(
         df=df,
@@ -526,19 +510,13 @@ def main() -> None:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
     confidence_fig = make_confidence_diff_plot(plotting_data)
-    confidence_path = (
-        data_dir
-        / "confidence_plots"
-        / CONFIDENCE_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
-    )
+    confidence_path = data_dir / "confidence_plots" / CONFIDENCE_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
     emit_figure(confidence_fig, save=args.save, save_path=confidence_path)
 
     confidence_heatmap_df = build_confidence_diff_heatmap_input(plotting_data)
     confidence_heatmap_fig = make_confidence_diff_heatmap_plot(confidence_heatmap_df)
     confidence_heatmap_path = (
-        data_dir
-        / "confidence_diff_heatmaps"
-        / CONFIDENCE_HEATMAP_FILENAME_TEMPLATE.format(timestamp=timestamp)
+        data_dir / "confidence_diff_heatmaps" / CONFIDENCE_HEATMAP_FILENAME_TEMPLATE.format(timestamp=timestamp)
     )
     emit_figure(
         confidence_heatmap_fig,
@@ -548,11 +526,7 @@ def main() -> None:
 
     heatmap_df_rnd1, heatmap_df_rnd2 = build_heatmap_inputs(plotting_data)
     heatmap_fig = make_delegation_heatmap_plot(heatmap_df_rnd1, heatmap_df_rnd2)
-    heatmap_path = (
-        data_dir
-        / "delegation_heatmaps"
-        / HEATMAP_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
-    )
+    heatmap_path = data_dir / "delegation_heatmaps" / HEATMAP_PLOT_FILENAME_TEMPLATE.format(timestamp=timestamp)
     emit_figure(heatmap_fig, save=args.save, save_path=heatmap_path)
 
 

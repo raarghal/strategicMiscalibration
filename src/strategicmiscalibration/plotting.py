@@ -151,8 +151,6 @@ ax.axhline(1.0, color="black", linewidth=0.5, alpha=0.3)
 output_dir = Path(__file__).resolve().parents[2] / "figures"
 print(output_dir)
 output_dir.mkdir(parents=True, exist_ok=True)
-fig.savefig(
-    output_dir / "trust_regions.pdf", format="pdf", dpi=1200, bbox_inches="tight"
-)
+fig.savefig(output_dir / "trust_regions.pdf", format="pdf", dpi=1200, bbox_inches="tight")
 
 plt.close(fig)

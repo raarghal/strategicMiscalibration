@@ -71,9 +71,7 @@ def _append_round_result(
             agent_solution=agent_solution,
             agent_confidence=agent_confidence,
             agent_correct=agent_correct,
-            confidence_diff=compute_confidence_diff(
-                baseline_confidence, agent_confidence
-            ),
+            confidence_diff=compute_confidence_diff(baseline_confidence, agent_confidence),
         )
     )
 
@@ -117,9 +115,7 @@ def run_one_trial(
         difficulty = task_data["difficulty"]
 
         baseline = query_and_sanitize_baseline_response(cfg, task, correct_solution)
-        agent = query_and_sanitize_agent_game_response(
-            cfg, task, correct_solution, history=None
-        )
+        agent = query_and_sanitize_agent_game_response(cfg, task, correct_solution, history=None)
         _append_round_result(
             round_results,
             round_idx=round_idx,
@@ -147,9 +143,7 @@ def run_one_trial(
     }
 
 
-def compute_trial_statistics(
-    round_results: List[RoundResult], cfg: BaseGameConfig
-) -> TrialStatistics:
+def compute_trial_statistics(round_results: List[RoundResult], cfg: BaseGameConfig) -> TrialStatistics:
     """
     Compute summary statistics for a single trial.
 
@@ -203,11 +197,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
 
     # Create output directory
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_path = (
-        Path(__file__).parent.parent.parent
-        / Path(cfg.output_dir)
-        / f"single_player_{timestamp}"
-    )
+    output_path = Path(__file__).parent.parent.parent / Path(cfg.output_dir) / f"single_player_{timestamp}"
     output_path.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory: %s", output_path)
 
@@ -239,19 +229,13 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     progress.close()
 
     # Compute overall statistics
-    valid_trials = [
-        t for t in all_trial_results if "error" not in t.get("statistics", {})
-    ]
-    logger.info(
-        "Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials
-    )
+    valid_trials = [t for t in all_trial_results if "error" not in t.get("statistics", {})]
+    logger.info("Completed %s valid trials out of %s", len(valid_trials), cfg.num_trials)
 
     if valid_trials:
         # Aggregate statistics across trials
         baseline_accuracies = aggregate_trial_stats(valid_trials, "baseline_accuracy")
-        baseline_confidences = aggregate_trial_stats(
-            valid_trials, "mean_baseline_confidence"
-        )
+        baseline_confidences = aggregate_trial_stats(valid_trials, "mean_baseline_confidence")
         agent_accuracies = aggregate_trial_stats(valid_trials, "agent_accuracy")
         agent_confidences = aggregate_trial_stats(valid_trials, "mean_agent_confidence")
         confidence_diffs = aggregate_trial_stats(valid_trials, "mean_confidence_diff")
@@ -267,15 +251,9 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
             "mean_agent_accuracy": compute_mean(agent_accuracies),
             # Confidence comparison
             "mean_confidence_diff": compute_mean(confidence_diffs),
-            "total_confidence_inflated": sum_trial_stats(
-                valid_trials, "confidence_inflated_count"
-            ),
-            "total_confidence_deflated": sum_trial_stats(
-                valid_trials, "confidence_deflated_count"
-            ),
-            "total_confidence_unchanged": sum_trial_stats(
-                valid_trials, "confidence_unchanged_count"
-            ),
+            "total_confidence_inflated": sum_trial_stats(valid_trials, "confidence_inflated_count"),
+            "total_confidence_deflated": sum_trial_stats(valid_trials, "confidence_deflated_count"),
+            "total_confidence_unchanged": sum_trial_stats(valid_trials, "confidence_unchanged_count"),
         }
     else:
         overall_stats = {"error": "No valid trials completed"}
@@ -318,9 +296,7 @@ def run_trials(cfg: BaseGameConfig) -> Dict[str, Any]:
     return results
 
 
-def generate_summary_report(
-    cfg: BaseGameConfig, timestamp: str, overall_stats: Dict[str, Any]
-) -> str:
+def generate_summary_report(cfg: BaseGameConfig, timestamp: str, overall_stats: Dict[str, Any]) -> str:
     """
     Generate a human-readable summary report.
 
@@ -356,38 +332,24 @@ def generate_summary_report(
         lines.append("")
         lines.append("Baseline Performance (no game context):")
         if overall_stats.get("mean_baseline_confidence") is not None:
-            lines.append(
-                f"  Mean confidence: {overall_stats['mean_baseline_confidence']:.4f}"
-            )
+            lines.append(f"  Mean confidence: {overall_stats['mean_baseline_confidence']:.4f}")
         if overall_stats.get("mean_baseline_accuracy") is not None:
-            lines.append(
-                f"  Mean accuracy: {overall_stats['mean_baseline_accuracy']:.4f}"
-            )
+            lines.append(f"  Mean accuracy: {overall_stats['mean_baseline_accuracy']:.4f}")
 
         lines.append("")
         lines.append("Agent Performance (strategic context):")
         if overall_stats.get("mean_agent_confidence") is not None:
-            lines.append(
-                f"  Mean confidence: {overall_stats['mean_agent_confidence']:.4f}"
-            )
+            lines.append(f"  Mean confidence: {overall_stats['mean_agent_confidence']:.4f}")
         if overall_stats.get("mean_agent_accuracy") is not None:
             lines.append(f"  Mean accuracy: {overall_stats['mean_agent_accuracy']:.4f}")
 
         lines.append("")
         lines.append("Confidence Comparison (game - baseline):")
         if overall_stats.get("mean_confidence_diff") is not None:
-            lines.append(
-                f"  Mean difference: {overall_stats['mean_confidence_diff']:.4f}"
-            )
-        lines.append(
-            f"  Inflated (game > baseline): {overall_stats['total_confidence_inflated']} times"
-        )
-        lines.append(
-            f"  Deflated (game < baseline): {overall_stats['total_confidence_deflated']} times"
-        )
-        lines.append(
-            f"  Unchanged: {overall_stats['total_confidence_unchanged']} times"
-        )
+            lines.append(f"  Mean difference: {overall_stats['mean_confidence_diff']:.4f}")
+        lines.append(f"  Inflated (game > baseline): {overall_stats['total_confidence_inflated']} times")
+        lines.append(f"  Deflated (game < baseline): {overall_stats['total_confidence_deflated']} times")
+        lines.append(f"  Unchanged: {overall_stats['total_confidence_unchanged']} times")
     else:
         lines.append(f"  Error: {overall_stats['error']}")
 

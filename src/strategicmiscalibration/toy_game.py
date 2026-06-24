@@ -95,13 +95,11 @@ def run_one_round(
     }
 
     # --- Agent signal ---
-    template_path = (
-        cfg.game_final_template_path
-        if round_num == cfg.num_rounds
-        else cfg.game_template_path
-    )
+    template_path = cfg.game_final_template_path if round_num == cfg.num_rounds else cfg.game_template_path
     agent_prompt = load_template(
         template_path,
+        output_mode=cfg.output_mode,
+        response_schema=ToyAgentSignalResponse,
         round_num=round_num,
         total_rounds=cfg.num_rounds,
         discount_factor=cfg.discount_factor,
@@ -124,6 +122,7 @@ def run_one_round(
             ToyAgentSignalResponse,
             cfg.max_tokens,
             cfg.temperature,
+            output_mode=cfg.output_mode,
         )
     except Exception as e:
         logger.warning("Agent signal query failed (round=%s): %s", round_num, e)
@@ -143,6 +142,8 @@ def run_one_round(
     # --- User decision ---
     user_decision_prompt = load_template(
         cfg.user_decision_template_path,
+        output_mode=cfg.output_mode,
+        response_schema=ToyUserDecisionResponse,
         round_num=round_num,
         total_rounds=cfg.num_rounds,
         reward=cfg.reward,
@@ -163,6 +164,7 @@ def run_one_round(
             ToyUserDecisionResponse,
             cfg.max_tokens,
             cfg.temperature,
+            output_mode=cfg.output_mode,
         )
     except Exception as e:
         logger.warning("User decision query failed (round=%s): %s", round_num, e)
@@ -192,6 +194,8 @@ def run_one_round(
         # User posterior belief update
         posterior_prompt = load_template(
             cfg.user_posterior_template_path,
+            output_mode=cfg.output_mode,
+            response_schema=ToyUserPosteriorResponse,
             round_num=round_num,
             total_rounds=cfg.num_rounds,
             reward=cfg.reward,
@@ -214,6 +218,7 @@ def run_one_round(
                 ToyUserPosteriorResponse,
                 cfg.max_tokens,
                 cfg.temperature,
+                output_mode=cfg.output_mode,
             )
             final_h = max(0.0, min(1.0, posterior_resp.belief_honesty))
             final_mu = max(0.0, min(1.0, posterior_resp.belief_agent_ability))
@@ -239,9 +244,7 @@ def run_one_round(
     return result, new_h, new_mu
 
 
-def run_one_trial(
-    cfg: ToyGameConfig, trial_idx: int, rng: random.Random
-) -> Dict[str, Any]:
+def run_one_trial(cfg: ToyGameConfig, trial_idx: int, rng: random.Random) -> Dict[str, Any]:
     """Run a single trial of num_rounds rounds, carrying beliefs forward."""
     h_t = cfg.h_0
     mu_t = cfg.mu_0
@@ -258,9 +261,7 @@ def run_one_trial(
     }
 
 
-def run_toy_trials(
-    cfg: ToyGameConfig, progress: Optional[tqdm] = None
-) -> Dict[str, Any]:
+def run_toy_trials(cfg: ToyGameConfig, progress: Optional[tqdm] = None) -> Dict[str, Any]:
     """Run multiple toy-game trials and return results in the standard format."""
     rng = random.Random(cfg.seed)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -289,9 +290,7 @@ def run_toy_trials(
 
     _progress_local = None
     if progress is None:
-        _progress_local = tqdm(
-            total=cfg.num_trials * cfg.num_rounds, desc="Toy game trials"
-        )
+        _progress_local = tqdm(total=cfg.num_trials * cfg.num_rounds, desc="Toy game trials")
         progress = _progress_local
 
     all_trial_results: List[Dict[str, Any]] = []
@@ -311,9 +310,7 @@ def run_toy_trials(
     }
 
 
-def run_experiments(
-    configs: List[ToyGameConfig], output_path: Path | str
-) -> pd.DataFrame:
+def run_experiments(configs: List[ToyGameConfig], output_path: Path | str) -> pd.DataFrame:
     """Run toy-game experiments across multiple configs and export results to CSV.
 
     Saves two files in output_path:
@@ -371,12 +368,7 @@ if __name__ == "__main__":
     configure_logging()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_filename = (
-        Path(__file__).parent.parent.parent
-        / "outputs"
-        / "experiments"
-        / f"sweep_toy_{timestamp}"
-    )
+    output_filename = Path(__file__).parent.parent.parent / "outputs" / "experiments" / f"sweep_toy_{timestamp}"
 
     DELTA_LIST = [0.05, 0.15, 0.35, 0.55, 0.95]
     C_LIST = [0.1]

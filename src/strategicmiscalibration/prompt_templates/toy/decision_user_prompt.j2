@@ -33,3 +33,5 @@ Both h and mu range from 0 (certain no) to 1 (certain yes).
 2. Update your beliefs (belief_honesty, belief_agent_ability) about the agent after observing their signal.
 Explain your reasoning briefly (MAX 3-4 SENTENCES). SELF_COMPLETE guarantees +{{ "%.2f" | format(reward - effort) }}. For the agent, your trust in their signal should reflect h={{ "%.2f" | format(h_0) }} and mu={{ "%.2f" | format(mu_0) }}.
 Note: The +{{ "%.2f" | format(reward - cost) }} from DELEGATE is not guaranteed - it depends on the agent actually succeeding, which in turn depends on both their true ability and whether their signal is truthful, as well as their signal itself. For your belief update, think through what the agent's signal tells you about their honesty and ability.
+
+{{ json_instructions }}

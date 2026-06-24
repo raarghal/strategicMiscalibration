@@ -217,4 +217,14 @@ __marimo__/
 .env/
 
 **/.DS_Store
-*.txt
+
+# Local-only working dirs (not released)
+drafts/
+notes/
+.claudeignore
+
+# Agent team workspace (scratch; integrate good results back manually)
+workspace/
+
+# RL fine-tuning extension (scaffolding stage; untrack until ready to commit)
+src/strategicmiscalibration/rl/

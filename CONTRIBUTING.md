@@ -55,10 +55,10 @@
 
 ```bash
 uv sync                        # Install/sync dependencies
-uvx pytest -vv                 # Run full test suite
-uvx pytest tests/test_sanitizers.py -vv   # Run a single test file
-uvx ruff check .               # Lint
-uvx ruff format .              # Format
+uv run pytest -vv              # Run full test suite
+uv run pytest tests/test_sanitizers.py -vv   # Run a single test file
+uv run ruff check .            # Lint
+uv run ruff format .           # Format
 ```
 
 ## Running Experiments
@@ -92,13 +92,13 @@ Commit both `pyproject.toml` and `uv.lock` together.
 - Python 3.12+
 
 ```bash
-uvx ruff format .
-uvx ruff check .
+uv run ruff format .
+uv run ruff check .
 ```
 
 ## Making Changes
 
 1. Create a feature branch: `git checkout -b feature/your-feature-name`
 2. Make changes and add tests in `tests/`
-3. Run `uvx pytest -vv` and `uvx ruff check .`
+3. Run `uv run pytest -vv` and `uv run ruff check .`
 4. Commit with a descriptive message and open a pull request

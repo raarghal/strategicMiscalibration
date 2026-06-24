@@ -1,5 +1,5 @@
 """
-Strategic Uncertainty Quantification package.
+Strategic Miscalibration package.
 
 This package provides tools for studying strategic behavior in LLM confidence reporting.
 """

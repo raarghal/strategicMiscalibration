@@ -28,13 +28,14 @@ class TestCostTracking:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = '{"answer": "test", "value": 1.0}'
+        mock_response.choices[0].message.reasoning_content = ""
         mock_completion.return_value = mock_response
 
         # Mock the cost calculation
         mock_cost.return_value = 0.001234
 
-        # Call the function
-        response, cost = _make_llm_request(
+        # Call the function ((content, cost, reasoning) 3-tuple)
+        response, cost, reasoning = _make_llm_request(
             model="test-model",
             prompt="test prompt",
             response_template=MockResponseModel,
@@ -45,10 +46,12 @@ class TestCostTracking:
         # Verify return types
         assert isinstance(response, str)
         assert isinstance(cost, float)
+        assert isinstance(reasoning, str)
 
         # Verify values
         assert response == '{"answer": "test", "value": 1.0}'
         assert cost == 0.001234
+        assert reasoning == ""
 
         # Verify completion was called correctly
         mock_completion.assert_called_once()
@@ -68,13 +71,14 @@ class TestCostTracking:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = '{"answer": "test", "value": 1.0}'
+        mock_response.choices[0].message.reasoning_content = ""
         mock_completion.return_value = mock_response
 
         # Mock cost calculation to raise an exception
         mock_cost.side_effect = Exception("Cost calculation failed")
 
-        # Call the function
-        response, cost = _make_llm_request(
+        # Call the function ((content, cost, reasoning) 3-tuple)
+        response, cost, reasoning = _make_llm_request(
             model="test-model",
             prompt="test prompt",
             response_template=MockResponseModel,
@@ -85,6 +89,7 @@ class TestCostTracking:
         # Verify that cost falls back to 0.0
         assert cost == 0.0
         assert isinstance(response, str)
+        assert isinstance(reasoning, str)
 
     @patch("strategicmiscalibration.llm_interface.completion")
     @patch("strategicmiscalibration.llm_interface.completion_cost")
@@ -93,9 +98,7 @@ class TestCostTracking:
         # Mock the completion response
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[
-            0
-        ].message.content = '{"answer": "test answer", "value": 42.5}'
+        mock_response.choices[0].message.content = '{"answer": "test answer", "value": 42.5}'
         mock_completion.return_value = mock_response
 
         # Mock the cost calculation
@@ -145,18 +148,16 @@ class TestCostTracking:
         # Verify cost calculation was still called
         mock_cost.assert_called_once()
 
-    @patch("strategicmiscalibration.llm_interface.completion")
-    @patch("strategicmiscalibration.llm_interface.completion_cost")
-    def test_query_llm_empty_response(self, mock_cost, mock_completion):
-        """Test that query_llm handles empty responses correctly."""
-        # Mock the completion response with empty content
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = ""
-        mock_completion.return_value = mock_response
+    @patch("strategicmiscalibration.llm_interface._make_llm_request")
+    def test_query_llm_empty_response(self, mock_request):
+        """query_llm raises when the underlying request yields empty content.
 
-        # Mock the cost calculation
-        mock_cost.return_value = 0.001
+        ``_make_llm_request`` is patched directly so the empty-content guard in
+        ``query_llm`` is exercised without triggering the (slow) tenacity retry
+        that wraps the real request. The request returns the current
+        ``(content, cost, reasoning)`` 3-tuple with both text channels empty.
+        """
+        mock_request.return_value = ("", 0.001, "")
 
         # Call the function and expect it to raise an error
         with pytest.raises(ValueError, match="Empty response from LLM"):
@@ -167,6 +168,3 @@ class TestCostTracking:
                 max_tokens=100,
                 temperature=0.0,
             )
-
-        # Verify cost calculation was still called
-        mock_cost.assert_called_once()
